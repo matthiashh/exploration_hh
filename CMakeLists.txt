@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(exploration_hh)
 
+set(ROS_BUILD_TYPE Debug)
+set(CMAKE_BUILD_TYPE Debug)
+
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
@@ -67,7 +70,7 @@ catkin_package(
 ## Your package locations should be listed before other locations
 # include_directories(include)
 include_directories(
-  ${catkin_INCLUDE_DIRS}
+${catkin_INCLUDE_DIRS}
 )
 
 ## Declare a cpp library
@@ -77,11 +80,12 @@ include_directories(
 
 ## Declare a cpp executable
  add_executable(exploration_hh src/exploration_hh.cpp)
+#add_executable(exploration_class src/exploration_hh.cpp)
 
 ## Add cmake target dependencies of the executable/library
 ## as an example, message headers may need to be generated before nodes
 # add_dependencies(exploration_hh_node exploration_hh_generate_messages_cpp)
-
+#add_dependencies(exploration_hh ${catkin_EXPORTED_TARGETS})
 ## Specify libraries to link a library or executable target against
  target_link_libraries(exploration_hh
    ${catkin_LIBRARIES}
