@@ -1,10 +1,10 @@
-#include <ros/ros.h>
-#include "exploration_hh.h"
+#include <ros/ros.h>                          // Needed for general ROS-support
+#include "exploration_hh.h"                   // Class header
 #include <kobuki_msgs/ButtonEvent.h>
 #include <kobuki_msgs/Led.h>
-#include <std_srvs/Empty.h>
-#include <std_msgs/Empty.h>
-#include <turtlebot_msgs/TakePanorama.h>
+#include <std_srvs/Empty.h>                   // Needed to send calls
+#include <std_msgs/Empty.h>                   //  --
+#include <turtlebot_msgs/TakePanorama.h>      // TODO Remove?
 #include <amcl/map/map.h>
 
 
@@ -15,28 +15,37 @@ int main(int argc, char** argv)
   Exploration exploration_object;
 
   ROS_INFO("Finished initialization, now running in the loop");
+  //This loop is supposed to run endless
   exploration_object.run();
   return 0;
 }
 
+//! This function initializes the exploration object
+
 Exploration::Exploration()
 {
-    ac_ = new actionlib::SimpleActionClient<move_base_msgs::MoveBaseAction>("move_base",true);
-    subExplorationGoals_ = n_.subscribe("/database_binding/exploration_goals",10,&Exploration::explorationGoalCallback, this);
-    busyDriving = false;
-    //initialize currentGoal
-    currentGoal_.target_pose.header.frame_id = "map";
-    while(!ac_->waitForServer(ros::Duration(5.0)))
-    {
-      ROS_INFO("Waiting for the move_base action server to come up");
-    }
+  // Initialization of the ROS-objects
+  ac_ = new actionlib::SimpleActionClient<move_base_msgs::MoveBaseAction>("move_base",true);
+  subExplorationGoals_ = n_.subscribe("/database_binding/exploration_goals",10,&Exploration::explorationGoalCallback, this);
+  // Needed - otherwise we're not going to have the first goal set
+  busyDriving = false;
+  //initialize currentGoal TODO: Should this move?
+  currentGoal_.target_pose.header.frame_id = "map";
+  while(!ac_->waitForServer(ros::Duration(5.0)))
+  {
+    ROS_INFO("Waiting for the move_base action server to come up");
+  }
 }
+
+//! This callback is called if a new goal is submitted on the topic
 
 void Exploration::explorationGoalCallback(const database_binding::explorationGoal received_goal) {
   ROS_INFO("Received a exploration goal with x = %f and y = %f",received_goal.exploration_x,received_goal.exploration_y);
   newGoals_.push_back(received_goal);
   calcExplorationGoals();
 }
+
+//! This orders the goals in the most effective way.
 
 bool Exploration::calcExplorationGoals()
 {
@@ -47,6 +56,8 @@ bool Exploration::calcExplorationGoals()
       newGoals_.erase(newGoals_.begin());
   }
 }
+
+//! This function sets the next goal and sends it to the actionserver
 
 void Exploration::setNewGoal()
 {
@@ -70,17 +81,20 @@ void Exploration::setNewGoal()
   }
 }
 
+//! This function is supposed to run endless
+
 int Exploration::run()
 {
   ros::Rate r(1);
   while (ros::ok())
   {
     //explorationGoal stuff
+    
+    // checks if we can set a new goal
     if((!busyDriving && !orderedGoals_.empty()) || (busyDriving && (ac_->getState() == actionlib::SimpleClientGoalState::SUCCEEDED)))
       {
         setNewGoal();
       }
-
 
     ros::spinOnce();
     r.sleep();
