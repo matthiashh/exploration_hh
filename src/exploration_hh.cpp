@@ -6,6 +6,7 @@
 #include <std_msgs/Empty.h>                   //  --
 #include <turtlebot_msgs/TakePanorama.h>      // TODO Remove?
 #include <amcl/map/map.h>
+#include <ros/console.h>                      // To perform debug-outputs
 
 
 
@@ -89,7 +90,7 @@ int Exploration::run()
   while (ros::ok())
   {
     //explorationGoal stuff
-    
+    ROS_DEBUG("Our goals state is: %s", ac_->getState().toString().c_str());
     // checks if we can set a new goal
     if((!busyDriving && !orderedGoals_.empty()) || (busyDriving && (ac_->getState() == actionlib::SimpleClientGoalState::SUCCEEDED)))
       {
