@@ -11,6 +11,7 @@ find_package(catkin REQUIRED COMPONENTS
   actionlib
   move_base_msgs
   roscpp
+  database_binding
 ) 
 
 ## System dependencies are found with CMake's conventions
@@ -58,7 +59,7 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES exploration_hh
-#  CATKIN_DEPENDS other_catkin_pkg
+  CATKIN_DEPENDS database_binding
 #  DEPENDS system_lib
 )
 

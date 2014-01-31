@@ -3,10 +3,10 @@
 
 #include <ros/ros.h>                                // needed for general ROS-support
 #include <vector>                                   // needed to store the goals
-#include <kobuki_msgs/ButtonEvent.h>    //TODO depricated?
-#include <kobuki_msgs/Led.h>            //TODO  --
-#include <std_srvs/Empty.h>             //TODO  --
-#include <std_msgs/Empty.h>             //TODO  --
+#include <kobuki_msgs/ButtonEvent.h>                //TODO depricated?
+#include <kobuki_msgs/Led.h>                        //TODO  --
+#include <std_srvs/Empty.h>                         //TODO  --
+#include <std_msgs/Empty.h>                         //TODO  --
 #include <database_binding/explorationGoal.h>       // exploration messagetype
 #include <move_base_msgs/MoveBaseAction.h>          // to make a move-base-client
 #include <actionlib/client/simple_action_client.h>  //  -- 
