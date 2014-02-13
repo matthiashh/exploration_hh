@@ -80,7 +80,7 @@ ${catkin_INCLUDE_DIRS}
 # )
 
 ## Declare a cpp executable
- add_executable(exploration_hh src/exploration_hh.cpp)
+ add_executable(exploration_hh_node src/exploration_hh.cpp)
 #add_executable(exploration_class src/exploration_hh.cpp)
 
 ## Add cmake target dependencies of the executable/library
@@ -88,7 +88,7 @@ ${catkin_INCLUDE_DIRS}
 # add_dependencies(exploration_hh_node exploration_hh_generate_messages_cpp)
 #add_dependencies(exploration_hh ${catkin_EXPORTED_TARGETS})
 ## Specify libraries to link a library or executable target against
- target_link_libraries(exploration_hh
+ target_link_libraries(exploration_hh_node
    ${catkin_LIBRARIES}
  )
 

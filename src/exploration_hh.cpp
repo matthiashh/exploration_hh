@@ -7,6 +7,8 @@
 #include <turtlebot_msgs/TakePanorama.h>      // TODO Remove?
 #include <amcl/map/map.h>
 #include <ros/console.h>                      // To perform debug-outputs
+#include <human_interface/RecognitionConfirmation.h>  // for confirmation of a person
+
 
 
 
@@ -36,6 +38,10 @@ Exploration::Exploration()
   {
     ROS_INFO("Waiting for the move_base action server to come up");
   }
+
+  //initialize detectionhandling
+  sub_detections_ = n_.subscribe("/person_detector/all_recognitions",10,&Exploration::detectionsCallback,this);
+  confirmation_client_ = n_.serviceClient<human_interface::RecognitionConfirmation>("human_interface/speech_confirmation");
 }
 
 //! This callback is called if a new goal is submitted on the topic
@@ -44,6 +50,11 @@ void Exploration::explorationGoalCallback(const database_binding::explorationGoa
   ROS_INFO("Received a exploration goal with x = %f and y = %f",received_goal.exploration_x,received_goal.exploration_y);
   newGoals_.push_back(received_goal);
   calcExplorationGoals();
+}
+
+void Exploration::detectionsCallback(const person_detector::DetectionObjectArray rec)
+{
+  detections_ = rec;
 }
 
 //! This orders the goals in the most effective way.
@@ -96,6 +107,22 @@ int Exploration::run()
       {
         setNewGoal();
       }
+
+    //detectionsstuff
+    ROS_INFO("Looking for detection");
+    if (!detections_.detections.empty() && !detections_.detections.front().recognitions.name_array.empty())
+    {
+      ROS_INFO("Found a detection and asking");
+      human_interface::RecognitionConfirmationRequest req;
+      human_interface::RecognitionConfirmationResponse res;
+      req.header.stamp = ros::Time::now();
+      std::string name = detections_.detections.front().recognitions.name_array.front().label;
+      req.name_array.push_back(name);
+      req.recognition_id = detections_.detections.front().header.seq;
+      confirmation_client_.call(req,res);
+    }
+
+
 
     ros::spinOnce();
     r.sleep();
