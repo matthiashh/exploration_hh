@@ -7,12 +7,22 @@
 #include <kobuki_msgs/Led.h>                        //TODO  --
 #include <std_srvs/Empty.h>                         //TODO  --
 #include <std_msgs/Empty.h>                         //TODO  --
-#include <database_binding/explorationGoal.h>       // exploration messagetype
+#include <exploration_hh/ExplorationGoal.h>         // exploration messagetype
 #include <move_base_msgs/MoveBaseAction.h>          // to make a move-base-client
 #include <actionlib/client/simple_action_client.h>  //  -- 
 #include <person_detector/DetectionObjectArray.h>   // to store the detections
 
-
+namespace exploration_hh
+{
+  enum state
+  {
+    IDLE,
+    EXPLORATION_GOAL,
+    FACE_RECOGNITION,
+    CONFIRMATION,
+    OBSTACLE_GOAL
+  };
+}
 
 class Exploration
 {
@@ -23,19 +33,27 @@ private:
   ros::ServiceClient clientMap_;
   ros::Subscriber sub_detections_;
   ros::ServiceClient confirmation_client_;
+  ros::Publisher pub_speech_;
   actionlib::SimpleActionClient<move_base_msgs::MoveBaseAction>* ac_;
 
   //own-variables
-  std::vector<database_binding::explorationGoal> newGoals_;
-  std::vector<database_binding::explorationGoal> orderedGoals_;
+  std::vector<exploration_hh::ExplorationGoal> exploration_goals_;
+  std::vector<exploration_hh::ExplorationGoal> recognition_goals_;
+  std::vector<exploration_hh::ExplorationGoal> obstacle_goals_;
+  std::vector<exploration_hh::ExplorationGoal> ordered_goals_;
   move_base_msgs::MoveBaseGoal currentGoal_;
   bool busyDriving;
   person_detector::DetectionObjectArray detections_;
+  int last_request_id;
+  ros::Time last_request_time;
+  std::string name;
+  exploration_hh::state node_state;
 
   //own-functions
-  void explorationGoalCallback(const database_binding::explorationGoal received_goal);
+  void explorationGoalCallback(const exploration_hh::ExplorationGoal received_goal);
   void detectionsCallback(const person_detector::DetectionObjectArray rec);
   bool calcExplorationGoals();
+  bool processDetections();
   void setNewGoal();
 public:
     Exploration();

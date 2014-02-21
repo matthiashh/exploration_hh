@@ -11,7 +11,9 @@ find_package(catkin REQUIRED COMPONENTS
   actionlib
   move_base_msgs
   roscpp
-  database_binding
+  message_generation
+  geometry_msgs
+  std_msgs  
 ) 
 
 ## System dependencies are found with CMake's conventions
@@ -28,11 +30,11 @@ find_package(catkin REQUIRED COMPONENTS
 #######################################
 
 ## Generate messages in the 'msg' folder
-# add_message_files(
-#   FILES
-#   Message1.msg
+ add_message_files(
+   FILES
+   ExplorationGoal.msg
 #   Message2.msg
-# )
+ )
 
 ## Generate services in the 'srv' folder
 # add_service_files(
@@ -42,10 +44,11 @@ find_package(catkin REQUIRED COMPONENTS
 # )
 
 ## Generate added messages and services with any dependencies listed here
-# generate_messages(
-#   DEPENDENCIES
-#   std_msgs  # Or other packages containing msgs
-# )
+ generate_messages(
+   DEPENDENCIES
+   std_msgs  # Or other packages containing msgs
+   geometry_msgs
+ )
 
 ###################################
 ## catkin specific configuration ##
@@ -59,7 +62,7 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES exploration_hh
-  CATKIN_DEPENDS database_binding
+#  CATKIN_DEPENDS database_binding
 #  DEPENDS system_lib
 )
 
@@ -86,7 +89,7 @@ ${catkin_INCLUDE_DIRS}
 ## Add cmake target dependencies of the executable/library
 ## as an example, message headers may need to be generated before nodes
 # add_dependencies(exploration_hh_node exploration_hh_generate_messages_cpp)
-#add_dependencies(exploration_hh ${catkin_EXPORTED_TARGETS})
+add_dependencies(exploration_hh_node ${catkin_EXPORTED_TARGETS})
 ## Specify libraries to link a library or executable target against
  target_link_libraries(exploration_hh_node
    ${catkin_LIBRARIES}
