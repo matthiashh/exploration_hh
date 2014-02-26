@@ -10,8 +10,26 @@
 #include <exploration_hh/ExplorationGoal.h>         // exploration messagetype
 #include <move_base_msgs/MoveBaseAction.h>          // to make a move-base-client
 #include <actionlib/client/simple_action_client.h>  //  -- 
-#include <person_detector/DetectionObjectArray.h>   // to store the detections
+#include <person_detector/DetectionObjectArray.h>   // to process and store the detections
+#include <person_detector/ObstacleArray.h>          // to process and store the obstacles
 #include <visualization_msgs/Marker.h>              // to show state in rviz
+
+//just here for non permanent purposes
+namespace human_interface {
+
+  struct speechRec {
+    ros::Time time;
+    std::string sentence;
+  };
+
+  enum yes_no_result {
+    ANSWERED = 0,
+    UNANSWERED = 1,
+    WRONG_ANSWER = 2,
+    BLOCKED_SPEAKER = 3
+  };
+}
+
 
 namespace exploration_hh
 {
@@ -41,7 +59,9 @@ private:
   ros::Subscriber subExplorationGoals_;
   ros::ServiceClient clientMap_;
   ros::Subscriber sub_detections_;
+  ros::Subscriber sub_obstacles_;
   ros::ServiceClient confirmation_client_;
+  ros::ServiceClient yes_no_client_;
   ros::Publisher pub_speech_;
   ros::Publisher pubConfirmations_;
   actionlib::SimpleActionClient<move_base_msgs::MoveBaseAction>* ac_;
@@ -54,11 +74,12 @@ private:
   std::vector<exploration_hh::ExplorationGoal> exploration_goals_;
   std::vector<exploration_hh::ExplorationGoal> recognition_goals_;
   std::vector<exploration_hh::ExplorationGoal> obstacle_goals_;
-  std::vector<exploration_hh::ExplorationGoal> ordered_goals_;
-  exploration_hh::ExplorationGoal current_goal_;
+  std::vector<exploration_hh::ExplorationGoal*> ordered_goals_;
+  exploration_hh::ExplorationGoal* current_goal_;
   move_base_msgs::MoveBaseGoal move_base_goal_;
   bool busyDriving;
   person_detector::DetectionObjectArray detections_;
+  person_detector::ObstacleArray obstacles_;
   int goal_counter;
   std::string name;
   exploration_hh::state node_state;
@@ -68,11 +89,14 @@ private:
   //own-functions
   void explorationGoalCallback(const exploration_hh::ExplorationGoal received_goal);
   void detectionsCallback(const person_detector::DetectionObjectArray rec);
+  void obstacleCallback(const person_detector::ObstacleArray obs);
   bool calcGoals();
   void showGoals();
   bool processDetections();
+  bool processObstacles();
   void setGoal_();
-  int confirmation_();
+  int confirmation_face_();
+  int confirmation_obstacle_();
   int recognitionGoal_();
   int explorationGoal_();
   int obstacleGoal_();

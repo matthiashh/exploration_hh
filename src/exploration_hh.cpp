@@ -9,8 +9,11 @@
 #include <amcl/map/map.h>
 #include <ros/console.h>                      // To perform debug-outputs
 #include <human_interface/RecognitionConfirmation.h>  // for confirmation of a person
+#include <human_interface/YesNoQuestion.h>    // To ask yes-no-questions
+//#include <human_interface/include/human_interface/enums.h>        // To get enums
 #include <person_detector/SpeechConfirmation.h> // To publish the speech confirmation
 #include <geometry_msgs/Point.h>              // for RVIZ
+
 
 
 
@@ -34,6 +37,7 @@ Exploration::Exploration()
   pubConfirmations_ = n_.advertise<person_detector::SpeechConfirmation>("/person_detector/confirmations",10);
   ac_ = new actionlib::SimpleActionClient<move_base_msgs::MoveBaseAction>("move_base",true);
   subExplorationGoals_ = n_.subscribe("/database_binding/exploration_goals",10,&Exploration::explorationGoalCallback, this);
+  sub_obstacles_ = n_.subscribe("/person_detector/all_obstacles",10,&Exploration::obstacleCallback,this);
   pub_speech_ = n_.advertise<human_interface::SpeechRequest>("/human_interface/speech_request",10);
   //initialize currentGoal
   move_base_goal_.target_pose.header.frame_id = "map";
@@ -70,6 +74,7 @@ Exploration::Exploration()
   //initialize detection handling
   sub_detections_ = n_.subscribe("/person_detector/all_recognitions",10,&Exploration::detectionsCallback,this);
   confirmation_client_ = n_.serviceClient<human_interface::RecognitionConfirmation>("human_interface/speech_confirmation");
+  yes_no_client_ = n_.serviceClient<human_interface::YesNoQuestion>("human_interface/yes_no_question");
   //init name - not permanent
   name = "Matthias";
   goal_counter = 0;
@@ -93,26 +98,38 @@ void Exploration::detectionsCallback(const person_detector::DetectionObjectArray
   detections_ = rec;
 }
 
+void Exploration::obstacleCallback(const person_detector::ObstacleArray obs)
+{
+  obstacles_ = obs;
+}
+
 //! This orders the goals in the most effective way.
 
 bool Exploration::calcGoals()
 {
   //clear the ordered goals and renew them
   ordered_goals_.clear();
-  //simple approach - first all recognitions - then all explorations
+  //simple approach - first all recognitions - then all obstacles - then all explorations
   for (unsigned int it = 0; it < recognition_goals_.size(); it++)
   {
-      if (!recognition_goals_[it].done)
-      {
-        ordered_goals_.push_back(recognition_goals_[it]);
-      }
+    if (!recognition_goals_[it].done)
+    {
+      ordered_goals_.push_back(&recognition_goals_[it]);
+    }
+  }
+  for (unsigned int it = 0; it < obstacle_goals_.size(); it++)
+  {
+    if (!obstacle_goals_[it].done)
+    {
+        ordered_goals_.push_back(&obstacle_goals_[it]);
+    }
   }
   for (unsigned int it = 0; it < exploration_goals_.size(); it++)
   {
-      if (!exploration_goals_[it].done)
-      {
-        ordered_goals_.push_back(exploration_goals_[it]);
-      }
+    if (!exploration_goals_[it].done)
+    {
+      ordered_goals_.push_back(&exploration_goals_[it]);
+    }
   }
 }
 
@@ -189,7 +206,7 @@ void Exploration::showGoals()
   {
       label = boost::lexical_cast<std::string>(it+1);
       label += ". ";
-      switch (ordered_goals_[it].type)
+      switch (ordered_goals_[it]->type)
       {
       case exploration_hh::EXPLORATION_GOAL :
           label += "Exploration ";
@@ -200,12 +217,12 @@ void Exploration::showGoals()
         case exploration_hh::RECOGNITION_GOAL :
           label += "Recognition";
       }
-      label += boost::lexical_cast<std::string>(ordered_goals_[it].probability);
-      text_marker_.pose.position.x = ordered_goals_[it].pose.pose.position.x-0.2;
-      text_marker_.pose.position.y = ordered_goals_[it].pose.pose.position.y-0.2;
+      label += boost::lexical_cast<std::string>(ordered_goals_[it]->probability);
+      text_marker_.pose.position.x = ordered_goals_[it]->pose.pose.position.x-0.2;
+      text_marker_.pose.position.y = ordered_goals_[it]->pose.pose.position.y-0.2;
       text_marker_.pose.position.z = 0.2;
       text_marker_.text = label;
-      text_marker_.id = ordered_goals_[it].header.seq;
+      text_marker_.id = ordered_goals_[it]->header.seq;
       pub_text_marker_.publish(text_marker_);
   }
 }
@@ -216,7 +233,7 @@ void Exploration::setGoal_()
 {
   if (!ordered_goals_.empty())
   {
-    switch (current_goal_.type)
+    switch (ordered_goals_.front()->type)
     {
       case exploration_hh::EXPLORATION_GOAL :
         node_state = exploration_hh::EXPLORATION;
@@ -232,8 +249,8 @@ void Exploration::setGoal_()
     }
     current_goal_ = ordered_goals_.front();
     move_base_goal_.target_pose.header.stamp = ros::Time::now();
-    move_base_goal_.target_pose.pose.position.x = ordered_goals_.front().pose.pose.position.x;
-    move_base_goal_.target_pose.pose.position.y = ordered_goals_.front().pose.pose.position.y;
+    move_base_goal_.target_pose.pose.position.x = (*ordered_goals_.front()).pose.pose.position.x;
+    move_base_goal_.target_pose.pose.position.y = (*ordered_goals_.front()).pose.pose.position.y;
     move_base_goal_.target_pose.pose.orientation.w = 0.70710678;
     move_base_goal_.target_pose.pose.orientation.z = -0.70710678;
     ROS_INFO("Sending goal with x = %f and y = %f",move_base_goal_.target_pose.pose.position.x, move_base_goal_.target_pose.pose.position.y);
@@ -247,10 +264,10 @@ void Exploration::setGoal_()
   }
 }
 
-int Exploration::confirmation_()
+int Exploration::confirmation_face_()
 {
   //search for our detection
-  int id = current_goal_.detection_id;
+  int id = current_goal_->detection_id;
   person_detector::DetectionObject* object;
   for (unsigned int it = 0; it < detections_.detections.size(); it++)
   {
@@ -344,7 +361,7 @@ int Exploration::confirmation_()
       //find our goal to delete it
       for (unsigned int it = 0; it < recognition_goals_.size(); it++)
       {
-          if (recognition_goals_[it].header.seq = current_goal_.header.seq)
+          if (recognition_goals_[it].header.seq = current_goal_->header.seq)
           {
               recognition_goals_[it].done = true;
           }
@@ -371,6 +388,81 @@ int Exploration::confirmation_()
   return 0;
 }
 
+int Exploration::confirmation_obstacle_()
+{
+  //Ask if it's a human person
+  human_interface::YesNoQuestionRequest req;
+  human_interface::YesNoQuestionResponse res;
+  // TODO send info to person_detector with running
+  req.question = "Hey, I'm Max and I'm searching for a person. I've seen this spot and wonder if you are human. Are you?";
+  req.header.stamp = ros::Time::now();
+  req.expires = ros::Time::now() + ros::Duration(15);
+  yes_no_client_.call(req,res);
+
+  //process result
+  if (res.status == human_interface::ANSWERED)
+  {
+    if (res.answer == true)
+    {
+      //Ask if it's the person, we're looking for
+        req.question = "Cool. Are you " + name + "?";
+        req.header.seq++;
+        yes_no_client_.call(req,res);
+      //Process this result
+      if (res.status == human_interface::ANSWERED)
+      {
+        if (res.answer == true)
+        {
+          //we found the person
+          // TODO send info to person_detector
+          human_interface::SpeechRequest s_req;
+          s_req.text_to_say = "Yeah - I've found you.";
+          pub_speech_.publish(s_req);
+          ordered_goals_.clear();
+          node_state = exploration_hh::IDLE;
+        }
+        else
+        {
+          human_interface::SpeechRequest s_req;
+          s_req.text_to_say = "Ok. I'm keeping on searching for " + name + ".";
+          // TODO send info to person_detector
+          pub_speech_.publish(s_req);
+          //set goal done and set new goal
+          current_goal_->done = true;
+          ordered_goals_.erase(ordered_goals_.begin());
+          setGoal_();
+        }
+      }
+      else if (res.status == human_interface::UNANSWERED || res.status == human_interface::WRONG_ANSWER || res.status == human_interface::BLOCKED_SPEAKER)
+      {
+        // TODO send info to person_detector
+        human_interface::SpeechRequest s_req;
+        s_req.text_to_say = "Okay, I assume that this is an obstacle and take a picture";
+        pub_speech_.publish(s_req);
+        node_state = exploration_hh::PANORAMA;
+        ROS_INFO("Switched state to PANORAMA");
+      }
+    }
+    else // answering no-human
+    {
+      human_interface::SpeechRequest s_req;
+      s_req.text_to_say = "You must be kidding. But I'm taking you serious and treat you as an obstacle.";
+      pub_speech_.publish(s_req);
+      // TODO send info to person_detector
+      node_state = exploration_hh::PANORAMA;
+      ROS_INFO("Switched to state PANORAMA.");
+    }
+  }
+  else if (res.status == human_interface::BLOCKED_SPEAKER || res.status == human_interface::UNANSWERED || res.status == human_interface::WRONG_ANSWER)
+  {
+    human_interface::SpeechRequest s_req;
+    s_req.text_to_say = "I didn't get an proper answer. I'm going to take a picture now";
+    pub_speech_.publish(s_req);
+    node_state = exploration_hh::PANORAMA;
+    ROS_INFO("Switched to state PANORAMA.");
+  }
+}
+
 int Exploration::recognitionGoal_()
 {
   //check if the person is in our FOV
@@ -386,7 +478,7 @@ int Exploration::recognitionGoal_()
     //find goal
     for (unsigned int it = 0; it < recognition_goals_.size(); it++)
     {
-      if (current_goal_.header.seq == recognition_goals_[it].header.seq)
+      if (current_goal_->header.seq == recognition_goals_[it].header.seq)
       {
           recognition_goals_[it].done = true;
       }
@@ -419,7 +511,7 @@ int Exploration::explorationGoal_()
     //find goal
     for (unsigned int it = 0; it < exploration_goals_.size(); it++)
     {
-      if (current_goal_.header.seq == exploration_goals_[it].header.seq)
+      if (current_goal_->header.seq == exploration_goals_[it].header.seq)
       {
           exploration_goals_[it].done = true;
       }
@@ -437,6 +529,30 @@ int Exploration::explorationGoal_()
 
 int Exploration::obstacleGoal_()
 {
+  //wait if our goal is running
+  if (ac_->getState() == actionlib::SimpleClientGoalState::PENDING || ac_->getState() == actionlib::SimpleClientGoalState::ACTIVE)
+  {
+    ROS_INFO_THROTTLE(15,"Driving to obstacle goal, %i",current_goal_->header.seq);
+    return 0;
+  }
+  if (ac_->getState() == actionlib::SimpleClientGoalState::ABORTED)
+  {
+    //find goal
+    for (unsigned int it = 0; it < exploration_goals_.size(); it++)
+    {
+      if (current_goal_->header.seq == obstacle_goals_[it].header.seq)
+      {
+          obstacle_goals_[it].done = true;
+      }
+    }
+    ordered_goals_.erase(ordered_goals_.begin());
+    setGoal_();
+  }
+  if (ac_->getState() == actionlib::SimpleClientGoalState::SUCCEEDED)
+  {
+    node_state = exploration_hh::CONFIRMATION;
+    ROS_INFO("Switched state to CONFIRMATION");
+  }
   return 0;
 }
 
@@ -444,13 +560,12 @@ int Exploration::panorama_()
 {
   //crazy stuff
 
-
   //clear goal
   //search for the goal
   exploration_hh::ExplorationGoal* found_goal;
   for (unsigned int it = 0; it < exploration_goals_.size(); it++)
   {
-    if (exploration_goals_[it].header.seq == current_goal_.header.seq)
+    if (exploration_goals_[it].header.seq == current_goal_->header.seq)
     {
         found_goal = &exploration_goals_[it];
         break;
@@ -458,7 +573,7 @@ int Exploration::panorama_()
   }
   for (unsigned int it = 0; it < obstacle_goals_.size(); it++)
   {
-      if (obstacle_goals_[it].header.seq == current_goal_.header.seq)
+      if (obstacle_goals_[it].header.seq == current_goal_->header.seq)
         {
             found_goal = &obstacle_goals_[it];
             break;
@@ -466,7 +581,7 @@ int Exploration::panorama_()
   }
   for (unsigned int it = 0; it < recognition_goals_.size(); it++)
   {
-      if (recognition_goals_[it].header.seq == current_goal_.header.seq)
+      if (recognition_goals_[it].header.seq == current_goal_->header.seq)
         {
             found_goal = &recognition_goals_[it];
             break;
@@ -530,6 +645,61 @@ bool Exploration::processDetections()
   return true;
 }
 
+bool Exploration::processObstacles()
+{
+  //skip if it's empty
+  if (obstacles_.obstacles.empty()) return true;
+  //update goals
+  for (unsigned int it = 0; it < obstacles_.obstacles.size(); it++)
+  {
+    //check if we already have this goal
+    bool found = false;
+    if (obstacle_goals_.size() > 0)
+    {
+      for (unsigned int ig = 0; ig < obstacle_goals_.size(); ig++)
+      {
+        if (obstacle_goals_[ig].detection_id == obstacles_.obstacles[it].header.seq)
+        {
+          //update information
+          found = true;
+          //delete it, if it's unchecked and doesn't exist anymore
+          if (!obstacles_.obstacles[it].present && !obstacles_.obstacles[it].checked)
+          {
+            obstacle_goals_.erase(obstacle_goals_.begin()+ig);
+            break;
+          }
+          if (obstacles_.obstacles[it].checked)
+          {
+              obstacle_goals_[ig].done = true;
+          }
+          obstacle_goals_[ig].pose.pose = obstacles_.obstacles[it].pose.pose.pose;
+          obstacle_goals_[ig].probability = obstacles_.obstacles[it].probability;
+          obstacle_goals_[ig].header.stamp = ros::Time::now();
+          break;
+        }
+      }
+    }
+    //if we found that obstacle,we're done with that
+    if (found) continue;
+    //otherwise we're creating a new goal
+    exploration_hh::ExplorationGoal goal;
+    goal.header.frame_id = "/map";
+    goal.header.seq = goal_counter;
+    goal_counter++;
+    goal.header.stamp = ros::Time::now();
+    goal.pose.header.frame_id = "/map";
+    goal.pose.header.seq = 0;
+    goal.pose.header.stamp = ros::Time::now();
+    goal.pose.pose = obstacles_.obstacles[it].pose.pose.pose;
+    goal.type = exploration_hh::OBSTACLE_GOAL;
+    goal.done = false;
+    goal.probability = obstacles_.obstacles[it].probability;
+    goal.detection_id = obstacles_.obstacles[it].header.seq;
+    obstacle_goals_.push_back(goal);
+    ROS_INFO("Added new obstacle");
+  }
+}
+
 //! This function is supposed to run endless
 
 int Exploration::run()
@@ -542,6 +712,7 @@ int Exploration::run()
     showGoals();
     //detectionsstuff
     processDetections();
+    processObstacles();
     //check if our current goal is still the prefered goal in the order
 
 
@@ -551,7 +722,14 @@ int Exploration::run()
         setGoal_();
         break;
       case exploration_hh::CONFIRMATION :
-        confirmation_();
+        if (current_goal_->type == exploration_hh::RECOGNITION_GOAL)
+        {
+          confirmation_face_();
+        }
+        else
+        {
+          confirmation_obstacle_();
+        }
         break;
       case exploration_hh::FACE_RECOGNITION :
         recognitionGoal_();

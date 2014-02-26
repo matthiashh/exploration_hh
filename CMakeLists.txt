@@ -8,6 +8,9 @@ set(CMAKE_BUILD_TYPE Debug)
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
+  human_interface
+  robot_control
+  person_detector
   actionlib
   move_base_msgs
   roscpp
@@ -60,7 +63,7 @@ find_package(catkin REQUIRED COMPONENTS
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
-#  INCLUDE_DIRS include
+  INCLUDE_DIRS include
 #  LIBRARIES exploration_hh
 #  CATKIN_DEPENDS database_binding
 #  DEPENDS system_lib
