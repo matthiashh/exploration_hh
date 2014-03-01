@@ -17,6 +17,8 @@ find_package(catkin REQUIRED COMPONENTS
   message_generation
   geometry_msgs
   std_msgs  
+  image_transport
+  cv_bridge
 ) 
 
 ## System dependencies are found with CMake's conventions
@@ -92,10 +94,11 @@ ${catkin_INCLUDE_DIRS}
 ## Add cmake target dependencies of the executable/library
 ## as an example, message headers may need to be generated before nodes
 # add_dependencies(exploration_hh_node exploration_hh_generate_messages_cpp)
-add_dependencies(exploration_hh_node ${catkin_EXPORTED_TARGETS})
+add_dependencies(exploration_hh_node image_transport ${catkin_EXPORTED_TARGETS})
 ## Specify libraries to link a library or executable target against
  target_link_libraries(exploration_hh_node
    ${catkin_LIBRARIES}
+   #image_transport
  )
 
 #############
