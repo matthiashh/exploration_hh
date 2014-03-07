@@ -2,6 +2,7 @@
 #define EXPLORATION_HH_H
 
 #include <ros/ros.h>                                // needed for general ROS-support
+#include <robot_control/RobotControlSimpleClient.h>  // class inherits from the simpleclient
 #include <vector>                                   // needed to store the goals
 #include <kobuki_msgs/ButtonEvent.h>                //TODO depricated?
 #include <kobuki_msgs/Led.h>                        //TODO  --
@@ -19,6 +20,7 @@
 #include <opencv/cv.h>                              // to save pictures
 #include <opencv/highgui.h>                         // to save pictures
 #include <human_interface/RecognitionConfirmation.h>  // for confirmation of a person
+#include <database_interface/postgresql_database.h> // to be able to use the database
 
 //just here for non permanent purposes
 namespace human_interface {
@@ -35,7 +37,6 @@ namespace human_interface {
     BLOCKED_SPEAKER = 3
   };
 }
-
 
 namespace exploration_hh
 {
@@ -74,24 +75,29 @@ namespace exploration_hh
 /*! The Exploration class is able to coordinate and influence the search for a person */
 
 
-class Exploration
+class Exploration : public RobotControlSimpleClient
 {
 private:
-  //ROS-stuff
-  ros::NodeHandle n_;                                                    //!< Mandatory ROS-Nodehandler
+  //ROS and Markers
+  //ros::NodeHandle n_;                                                    //!< Mandatory ROS-Nodehandler
   ros::Subscriber sub_exploration_goals_;                                //!< Subscriber for database-given exploration goals
   ros::Subscriber sub_detections_;                                       //!< Subscriber for person_detector face detections
   ros::Subscriber sub_obstacles_;                                        //!< Subscriber for person_detector obstacles
   ros::ServiceClient confirmation_client_;                               //!< Client for human_interface confirmation requests
   ros::ServiceClient yes_no_client_;                                     //!< Client for human_interface yes-no-questions
   ros::Publisher pub_speech_;                                            //!< Publisher for human_interface text-to-speech requests
-  ros::Publisher pubConfirmations_;                                      //!< Publisher for person_detector confirmations
+  ros::Publisher pub_confirmations_;                                     //!< Publisher for person_detector confirmations
   image_transport::Subscriber *sub_img_;                                 //!< Subscriber for the panorama image topic
   actionlib::SimpleActionClient<move_base_msgs::MoveBaseAction>* ac_;    //!< Client for navigation goals
   ros::Publisher pub_point_marker_;                                      //!< Publisher for rviz goal-cubes
   visualization_msgs::Marker point_marker_;                              //!< Internal storage for rviz goal-cubes. This is used to avoid the initialization.
   ros::Publisher pub_text_marker_;                                       //!< Publisher for rviz goal-text
   visualization_msgs::Marker text_marker_;                               //!< Internal storage for rviz goal-text
+
+  //Database
+  //! A database object for the connection to the PostgresqlDatabase
+  /*! It holds the connection, can report about its state and do queries.*/
+  database_interface::PostgresqlDatabase* database_;
 
   //own-variables
   std::vector<exploration_hh::ExplorationGoal> exploration_goals_;       //!< Internal storage for exploration goals
@@ -141,6 +147,7 @@ private:
   bool first_goal_set_;                                                 //!< Needed to avoid a segfault if we haven't set a goal before
 
 
+
   //own-functions are documented in the cpp
   //! The callback for a new exploration goal sent by the database
   /*! \param received_goal The new goal received from the database */
@@ -175,13 +182,13 @@ private:
 
   //! Sets the next goal of the ordered_goals vector and changes the state
   /*! \sa ordered_goals_ current_goal_ */
-  void setGoal_();
+  void setGoal();
 
   //! Called function in the state CONFIRMATION with current_goal_ = OBSTACLE_GOAL
-  int confirmation_face_();
+  int confirmation_face();
 
   //! Called function in the state CONFIRMATION with current_goal_ = RECOGNITION_GOAL
-  int confirmation_obstacle_();
+  int confirmation_obstacle();
 
   //! Called function in the state RECOGNITION
   int recognitionGoal_();
@@ -194,10 +201,24 @@ private:
 
   //! Called function in the state PANORAMA
   int panorama_();
+
+  //! Used to get a list of places to a task
+  /*! \return true on success */
+  bool getPlaces();
+
+  //! Check for incoming goals if database data is available
+  /*! \return true if the new goal will be accepted */
+  bool checkIncomingGoal(robot_control::RobotTaskGoalConstPtr goal, robot_control::RobotTaskResult &res);
+
+  bool cleanupCancelledGoal(robot_control::RobotTaskResult &res);
+
+  //! Cleanup after finishing the task
+  void finishTask(bool success, std::string res);
+
 public:
 
     //! Constructor - intializes the class
-    Exploration();
+    Exploration(std::string task_server_name, std::string task_name);
 
     //! Run loop which runs endless
     int run();
