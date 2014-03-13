@@ -20,6 +20,7 @@ find_package(catkin REQUIRED COMPONENTS
   image_transport
   cv_bridge
   sql_database
+  navfn
 ) 
 
 ## System dependencies are found with CMake's conventions
@@ -66,7 +67,7 @@ find_package(catkin REQUIRED COMPONENTS
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
-  INCLUDE_DIRS include
+  INCLUDE_DIRS include /opt/ros/hydro/include/navfn
 #  LIBRARIES exploration_hh
 #  CATKIN_DEPENDS database_binding
 #  DEPENDS system_lib
@@ -81,6 +82,7 @@ catkin_package(
 # include_directories(include)
 include_directories(
 include
+/opt/ros/hydro/include/navfn
 ${catkin_INCLUDE_DIRS}
 )
 

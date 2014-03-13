@@ -5,10 +5,8 @@
 #include <std_srvs/Empty.h>                   // Needed to send calls
 #include <std_msgs/Empty.h>                   //  --
 #include <human_interface/SpeechRequest.h>    // To say things
-#include <turtlebot_msgs/TakePanorama.h>      // TODO Remove?
 #include <amcl/map/map.h>
 #include <ros/console.h>                      // To perform debug-outputs
-
 #include <human_interface/YesNoQuestion.h>    // To ask yes-no-questions
 //#include <human_interface/include/human_interface/enums.h>        // To get enums - doesn't work
 #include <person_detector/SpeechConfirmation.h> // To publish the speech confirmation
@@ -16,7 +14,12 @@
 #include <sensor_msgs/image_encodings.h>      // to save images as files
 #include <exploration_hh/returnPlaces.h>      // the struct for the database binding
 #include <actionlib_msgs/GoalStatus.h>        // to process the goal status
-
+#include <tf/LinearMath/Quaternion.h>         // to calculate the quaternion
+#include <eigen3/Eigen/Geometry>
+#include <eigen3/Eigen/Eigen>
+#include <navfn/navfn/navfn_ros.h>
+#include <nav_core/base_global_planner.h>
+#include <navfn/MakeNavPlan.h>
 
 //! The main loop initializes the node, build an object and runs it endless
 
@@ -78,7 +81,7 @@ Exploration::Exploration(std::string task_server_name, std::string task_name) : 
   sub_detections_ = n_.subscribe("/person_detector/all_recognitions",10,&Exploration::detectionsCallback,this);
   confirmation_client_ = n_.serviceClient<human_interface::RecognitionConfirmation>("human_interface/speech_confirmation");
   yes_no_client_ = n_.serviceClient<human_interface::YesNoQuestion>("human_interface/yes_no_question");
-  //init name - not permanent
+  //init name - will be overwritten by the task
   name_ = "Matthias";
   goal_counter_ = 0;
   node_state_ = exploration_hh::IDLE;
@@ -88,9 +91,12 @@ Exploration::Exploration(std::string task_server_name, std::string task_name) : 
   erase_threshold_ = 60;
   image_counter_ = 0;
   first_goal_set_ = false;
+  panorama_taken_ = false;
 
   //initialize image-saving
   sub_img_ = new image_transport::Subscriber (imageTransport_.subscribe("/turtlebot_panorama/panorama",1,&Exploration::imageCallback,this));
+  pub_pano_start_ = n_.advertise<std_msgs::Empty> ("/turtlebot_panorama/take_pano",1);
+  pub_pano_stop_ = n_.advertise<std_msgs::Empty> ("/turtlebot_panorama/stop_pano",1);
 
   //initialize database connection
   std::string host,port,user,passwd,db;
@@ -142,7 +148,7 @@ void Exploration::imageCallback(const sensor_msgs::Image::ConstPtr &img)
   //we receive several images in between, before we get the actual panorama image - trying.
   //but we know, that panorama images are quite big, so we define a treshhold
   if (img.get()->width < 1500) return;
-
+  panorama_taken_ = true;
   //first save internal
   exploration_hh::img_meta internal;
   internal.id = image_counter_;
@@ -425,11 +431,8 @@ int Exploration::confirmation_face()
         //publish result to person_detector
         human_interface::SpeechRequest sp_req;
         sp_req.text_to_say = "Hey, I was searching for you. I'm so happy that I found you.";
-        std::string task_result = "Sucessfully found the person based on face recognition";
-        finishTask(true, task_result);
         pub_speech_.publish(sp_req);
-        ordered_goals_.clear();
-        node_state_ = exploration_hh::IDLE;
+        node_state_ = exploration_hh::FOUND;
       }
       else //another person
       {
@@ -527,11 +530,8 @@ int Exploration::confirmation_obstacle()
           pub_confirmations_.publish(conf);
           human_interface::SpeechRequest s_req;
           s_req.text_to_say = "Yeah - I've found you.";
-          std::string task_result = "Succesfully found the person based on the obstacle approach";
-          finishTask(true,task_result);
           pub_speech_.publish(s_req);
-          ordered_goals_.clear();
-          node_state_ = exploration_hh::IDLE;
+          node_state_ = exploration_hh::FOUND;
         }
         else
         {
@@ -609,7 +609,7 @@ int Exploration::recognitionGoal_()
     ROS_INFO_THROTTLE(15,"Driving to recognition goal");
     return 0;
   }
-  if (ac_->getState() == actionlib::SimpleClientGoalState::ABORTED)
+  else if (ac_->getState() == actionlib::SimpleClientGoalState::ABORTED)
   {
     //find goal and mark it as done
     for (unsigned int it = 0; it < recognition_goals_.size(); it++)
@@ -621,11 +621,11 @@ int Exploration::recognitionGoal_()
     }
     ordered_goals_.erase(ordered_goals_.begin());
     human_interface::SpeechRequest sp_req;
-    sp_req.text_to_say = "Sorry, I could reach you. I'm going on";
+    sp_req.text_to_say = "Sorry, I couldn't' reach you. I'm going on";
     pub_speech_.publish(sp_req);
     setGoal();
   }
-  if (ac_->getState() == actionlib::SimpleClientGoalState::SUCCEEDED)
+  else if (ac_->getState() == actionlib::SimpleClientGoalState::SUCCEEDED)
   {
     node_state_ = exploration_hh::CONFIRMATION;
     ROS_INFO("Switched state to CONFIRMATION");
@@ -696,40 +696,79 @@ int Exploration::obstacleGoal_()
 
 int Exploration::panorama_()
 {
-  //crazy stuff
-  ROS_INFO("Fake done with panorama");
-  //clear goal
-  //search for the goal
-  exploration_hh::ExplorationGoal* found_goal;
-  /*! \todo We have pointers. This can be done easier! */
-  for (unsigned int it = 0; it < exploration_goals_.size(); it++)
+  if (!panorama_taken_ && !panorama_running_)
   {
-    if (exploration_goals_[it].header.seq == current_goal_->header.seq)
-    {
-        found_goal = &exploration_goals_[it];
-        break;
-    }
+    ROS_INFO("Starting to take the panorama");
+    std_msgs::Empty msg;
+    pub_pano_start_.publish(msg);
+    panorama_running_ = true;
   }
-  for (unsigned int it = 0; it < obstacle_goals_.size(); it++)
+  else if (!panorama_taken_ && panorama_running_)
   {
-    if (obstacle_goals_[it].header.seq == current_goal_->header.seq)
-    {
-        found_goal = &obstacle_goals_[it];
-        break;
-    }
+    ROS_INFO_THROTTLE(5,"Taking the panorama picture");
+    return true;
   }
-  for (unsigned int it = 0; it < recognition_goals_.size(); it++)
+  else
   {
-    if (recognition_goals_[it].header.seq == current_goal_->header.seq)
+    ROS_INFO("Finished to take the panorama picture");
+    panorama_running_ = false;
+    //clear goal
+    //search for the goal
+    exploration_hh::ExplorationGoal* found_goal;
+    /*! \todo We have pointers. This can be done easier! */
+    for (unsigned int it = 0; it < exploration_goals_.size(); it++)
     {
-        found_goal = &recognition_goals_[it];
-        break;
+      if (exploration_goals_[it].header.seq == current_goal_->header.seq)
+      {
+          found_goal = &exploration_goals_[it];
+          break;
+      }
     }
+    for (unsigned int it = 0; it < obstacle_goals_.size(); it++)
+    {
+      if (obstacle_goals_[it].header.seq == current_goal_->header.seq)
+      {
+          found_goal = &obstacle_goals_[it];
+          break;
+      }
+    }
+    for (unsigned int it = 0; it < recognition_goals_.size(); it++)
+    {
+      if (recognition_goals_[it].header.seq == current_goal_->header.seq)
+      {
+          found_goal = &recognition_goals_[it];
+          break;
+      }
+    }
+    found_goal->done = true;
+    ordered_goals_.erase(ordered_goals_.begin());
+    setGoal();
   }
-  found_goal->done = true;
-  ordered_goals_.erase(ordered_goals_.begin());
-  setGoal();
   return 0;
+}
+
+
+void Exploration::found()
+{
+  human_interface::YesNoQuestionRequest req;
+  human_interface::YesNoQuestionResponse res;
+  req.question = "Are you okay?";
+  yes_no_client_.call(req,res);
+  human_interface::SpeechRequest s_req;
+  if (res.answer)
+  {
+    s_req.text_to_say = "That's fine. So I'm going to go on";
+  }
+  else
+  {
+      s_req.text_to_say = "That's a pity. I'm informing your smart home about that";
+  }
+  pub_speech_.publish(req);
+  std::string task_result = "Sucessfully found the person based on face recognition";
+  finishTask(true, task_result);
+  node_state_ = exploration_hh::IDLE;
+  ROS_INFO("Done with the task. Node state is IDLE");
+  return;
 }
 
 bool Exploration::getPlaces()
@@ -766,6 +805,67 @@ bool Exploration::getPlaces()
   return true;
 }
 
+bool Exploration::calcGoalPlace(geometry_msgs::Pose *robot_pose, geometry_msgs::Pose *int_place, geometry_msgs::Pose &goal)
+{
+  //the pythagorean theorem and the quadratic equation are used to calculate the position
+  //the goal is to find a point 1m in front of the interesting place on the line between the robot pose and the place
+  double distance = 1;
+  //build a line
+  double b = 0;
+  double m = 0;
+  m = (robot_pose->position.y - int_place->position.y) / (robot_pose->position.x - int_place->position.x);
+  b = robot_pose->position.y - m*robot_pose->position.x;
+
+  //we want to know, how much we have to move into x-direction to be <distance> away from the point
+  // a = 1 + m*m
+  // b = -2*int_place_x - 2*m*int_place_y + 2*m*b
+  // c = int_place_x*int_place_x + int_place_y*int_place_y - int_place_x*2*b + b*b - distance*distance
+  double q_a;
+  double q_b;
+  double q_c;
+  q_a = 1+m*m;
+  q_b = -2*int_place->position.x - 2*m*int_place->position.y + 2*m*b;
+  q_c = int_place->position.x*int_place->position.x + int_place->position.y*int_place->position.y - int_place->position.x*2*b + b*b - distance*distance;
+  //check the value in the sqrt
+  double root = (q_b*q_b)-4*q_a*q_c;
+  if (root < 0) return false;
+  double x_1;
+  double x_2;
+  x_1 = (-q_b + sqrt(root)) / (2*q_a);
+  x_2 = (-q_b - sqrt(root)) / (2*q_a);
+  //check distances to the robot pose and pick the closest one
+  double d1;
+  double d2;
+  d1 = sqrt((robot_pose->position.x - x_1)*(robot_pose->position.x - x_1));
+  d2 = sqrt((robot_pose->position.x - x_2)*(robot_pose->position.x - x_2));
+  if (d1 < d2)
+  {
+    goal.position.x =  x_1;
+    goal.position.y = m*x_1+b;
+  }
+  else
+  {
+    goal.position.x = x_2;
+    goal.position.y = m*x_2+b;
+  }
+
+  //quaternions
+  tf::Vector3 axe (0,0,1);
+
+  double angle = atan(m);
+  //tf::Vector3 rob (robot_pose->position.x,robot_pose->position.y,robot_pose->position.z);
+  //tf::Vector3 obs (int_place->position.x,int_place->position.y,int_place->position.z);
+  tf::Quaternion q;
+  q.setRotation(axe,angle);
+  //Eigen::Quaternion<double> quat;
+  //Eigen::QuaternionBase<double>::setFromTwoVectors(rob,obs);
+  goal.orientation.w = q.w();
+  goal.orientation.x = q.x();
+  goal.orientation.y = q.y();
+  goal.orientation.z = q.z();
+  return true;
+}
+
 bool Exploration::checkIncomingGoal(robot_control::RobotTaskGoalConstPtr goal, robot_control::RobotTaskResult &res)
 {
   //get configuration for that goal
@@ -789,12 +889,12 @@ void Exploration::finishTask(bool success, std::string res)
   if (success)
   {
     result_.success = true;
-    task_goal_->setSucceeded(result_,"Normally finished");
+    task_goal_.setSucceeded(result_,"Normally finished");
   }
   else
   {
     result_.success = false;
-    task_goal_->setAborted(result_,"Didn't find the person");
+    task_goal_.setAborted(result_,"Didn't find the person");
   }
   exploration_goals_.clear();
   goal_active_ = false;
@@ -839,7 +939,8 @@ bool Exploration::processDetections()
       goal.pose.header.frame_id = "/map";
       goal.pose.header.seq = 0;
       goal.pose.header.stamp = ros::Time::now();
-      goal.pose.pose = detections_.detections[it].last_seen_from.pose.pose;
+      calcGoalPlace(&detections_.detections[it].last_seen_from.pose.pose,&detections_.detections[it].latest_pose_map.pose,goal.pose.pose);
+      //goal.pose.pose = detections_.detections[it].last_seen_from.pose.pose;
       goal.type = exploration_hh::RECOGNITION_GOAL;
       goal.done = false;
       // there's some space to improve here
@@ -906,11 +1007,13 @@ bool Exploration::processObstacles()
       goal.pose.header.frame_id = "/map";
       goal.pose.header.seq = 0;
       goal.pose.header.stamp = ros::Time::now();
-      goal.pose.pose = obstacles_.obstacles[it].robot_pose.pose.pose;
       goal.type = exploration_hh::OBSTACLE_GOAL;
       goal.done = false;
       goal.probability = obstacles_.obstacles[it].probability;
       goal.detection_id = obstacles_.obstacles[it].header.seq;
+      // calculate the place to go
+      calcGoalPlace(&obstacles_.obstacles[it].robot_pose.pose.pose,&obstacles_.obstacles[it].center,goal.pose.pose);
+      //goal.pose.pose = obstacles_.obstacles[it].robot_pose.pose.pose;
       obstacle_goals_.push_back(goal);
       ROS_INFO("Added new obstacle to the goal list with goal_number %i, goal id %i and probability %i",goal_counter_,obstacle_goals_[it].header.seq,goal.probability);
 
@@ -923,6 +1026,8 @@ bool Exploration::processObstacles()
 
 int Exploration::run()
 {
+  navfn::NavfnROS nav;
+
   ros::Rate r(10);
   while (ros::ok())
   {
@@ -935,6 +1040,12 @@ int Exploration::run()
         std::string task_result = "Didn't find the person.";
         finishTask(false,task_result);
       }
+      else
+      {
+        feedback_.percentage = (exploration_goals_.size()+obstacle_goals_.size()+recognition_goals_.size())/ordered_goals_.size();
+        feedback_.intermediate_result = "Still running";
+        task_goal_.publishFeedback(feedback_);
+      }
     }
     showGoals();
     //detectionsstuff
@@ -943,61 +1054,71 @@ int Exploration::run()
 
     //we just need to continue if we have goals
     if (!ordered_goals_.empty())
+    {
+      if (!first_goal_set_)
       {
-        if (!first_goal_set_)
-        {
-          setGoal();
-        }
-        else
-        {
-          //check if our current goal is still the prefered goal in the order
-          if (current_goal_->detection_id != ordered_goals_.front()->detection_id)
-          {
-            //front goal is different - we have to set a new goal
-            if (node_state_ == exploration_hh::IDLE || node_state_ == exploration_hh::EXPLORATION || node_state_ == exploration_hh::OBSTACLE || node_state_ == exploration_hh::CONFIRMATION)
-            {
-              //in these state we're just driving or waiting - we can safely set a new goal
-              setGoal();
-            }
-            else if (node_state_ == exploration_hh::PANORAMA)
-            {
-              // aborting the panorama takes extra effort
+        setGoal();
+      }
+      else if (node_state_ == exploration_hh::CONFIRMATION || node_state_ == exploration_hh::FOUND)
+      {
 
-              // abort the panorama action
-              setGoal();
-            }
+      }
+      else
+      {
+        //check if our current goal is still the prefered goal in the order
+        if (current_goal_->detection_id != ordered_goals_.front()->detection_id)
+        {
+          //front goal is different - we have to set a new goal
+          if (node_state_ == exploration_hh::IDLE || node_state_ == exploration_hh::EXPLORATION || node_state_ == exploration_hh::OBSTACLE || node_state_ == exploration_hh::CONFIRMATION)
+          {
+            //in these state we're just driving or waiting - we can safely set a new goal
+            setGoal();
+          }
+          else if (node_state_ == exploration_hh::PANORAMA)
+          {
+            // aborting the panorama takes extra effort
+            std_msgs::Empty msg;
+            pub_pano_stop_.publish(msg);
+            panorama_taken_ = false;
+            panorama_running_ = false;
+            // abort the panorama action
+            setGoal();
           }
         }
-
-        switch (node_state_)
-        {
-          case exploration_hh::IDLE :
-            setGoal();
-            break;
-          case exploration_hh::CONFIRMATION :
-            if (current_goal_->type == exploration_hh::RECOGNITION_GOAL)
-            {
-              confirmation_face();
-            }
-            else
-            {
-              confirmation_obstacle();
-            }
-            break;
-          case exploration_hh::FACE_RECOGNITION :
-            recognitionGoal_();
-            break;
-          case exploration_hh::EXPLORATION :
-            explorationGoal_();
-            break;
-          case exploration_hh::PANORAMA :
-            panorama_();
-            break;
-          case exploration_hh::OBSTACLE :
-            obstacleGoal_();
-            break;
-        }
       }
+
+      switch (node_state_)
+      {
+        case exploration_hh::IDLE :
+          setGoal();
+          break;
+        case exploration_hh::CONFIRMATION :
+          if (current_goal_->type == exploration_hh::RECOGNITION_GOAL)
+          {
+            confirmation_face();
+          }
+          else
+          {
+            confirmation_obstacle();
+          }
+          break;
+        case exploration_hh::FACE_RECOGNITION :
+          recognitionGoal_();
+          break;
+        case exploration_hh::EXPLORATION :
+          explorationGoal_();
+          break;
+        case exploration_hh::PANORAMA :
+          panorama_();
+          break;
+        case exploration_hh::OBSTACLE :
+          obstacleGoal_();
+          break;
+        case exploration_hh::FOUND :
+          found();
+          break;
+      }
+    }
 
     ros::spinOnce();
     r.sleep();

@@ -50,6 +50,8 @@
   <build_depend>image_transport</build_depend>
   <build_depend>cv_bridge</build_depend>
   <build_depend>sql_database</build_depend>
+  <build_depend>navfn</build_depend>
+  <run_depend>navfn</run_depend>
   <run_depend>sql_database</run_depend>
   <run_depend>cv_bridge</run_depend>
   <run_depend>image_transport</run_depend>

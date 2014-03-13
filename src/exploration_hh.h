@@ -49,7 +49,8 @@ namespace exploration_hh
     FACE_RECOGNITION,                                                     //!< The current goal is a goal for a recognized face
     CONFIRMATION,                                                         //!< The confirmation of an obstacle or a recognized face takes place
     OBSTACLE,                                                             //!< The current goal is an obstacle goal
-    PANORAMA                                                              //!< A panorama picture is taken
+    PANORAMA,                                                             //!< A panorama picture is taken
+    FOUND                                                                 //!< Found the right person
   };
   //! Enum to distinguish different kind of goals
   /*! Every goal has to be of one kind.*/
@@ -79,7 +80,7 @@ class Exploration : public RobotControlSimpleClient
 {
 private:
   //ROS and Markers
-  //ros::NodeHandle n_;                                                    //!< Mandatory ROS-Nodehandler
+  //ros::NodeHandle n_;                                                  //!< Mandatory ROS-Nodehandler
   ros::Subscriber sub_exploration_goals_;                                //!< Subscriber for database-given exploration goals
   ros::Subscriber sub_detections_;                                       //!< Subscriber for person_detector face detections
   ros::Subscriber sub_obstacles_;                                        //!< Subscriber for person_detector obstacles
@@ -87,6 +88,8 @@ private:
   ros::ServiceClient yes_no_client_;                                     //!< Client for human_interface yes-no-questions
   ros::Publisher pub_speech_;                                            //!< Publisher for human_interface text-to-speech requests
   ros::Publisher pub_confirmations_;                                     //!< Publisher for person_detector confirmations
+  ros::Publisher pub_pano_start_;                                        //!< Publisher to start a panorama picture
+  ros::Publisher pub_pano_stop_;                                         //!< Publisher to stop a panorama picture
   image_transport::Subscriber *sub_img_;                                 //!< Subscriber for the panorama image topic
   actionlib::SimpleActionClient<move_base_msgs::MoveBaseAction>* ac_;    //!< Client for navigation goals
   ros::Publisher pub_point_marker_;                                      //!< Publisher for rviz goal-cubes
@@ -146,7 +149,8 @@ private:
   image_transport::ImageTransport imageTransport_;                      //!< Needed to connect to an sensor_msgs::Image stream
   bool first_goal_set_;                                                 //!< Needed to avoid a segfault if we haven't set a goal before
 
-
+  bool panorama_taken_;
+  bool panorama_running_;
 
   //own-functions are documented in the cpp
   //! The callback for a new exploration goal sent by the database
@@ -202,9 +206,19 @@ private:
   //! Called function in the state PANORAMA
   int panorama_();
 
+  //! Called function in the state FOUND
+  void found();
+
   //! Used to get a list of places to a task
   /*! \return true on success */
   bool getPlaces();
+
+  //! Used to calculate where the robot should go in order to speak with the person
+  /*! \param robot_pose The place from which the robot saw the interesting point
+      \param int_place  The interesting place
+      \param goal       Where the robot should go to for a conversation
+      \return success*/
+  bool calcGoalPlace(geometry_msgs::Pose* robot_pose, geometry_msgs::Pose* int_place, geometry_msgs::Pose &goal);
 
   //! Check for incoming goals if database data is available
   /*! \return true if the new goal will be accepted */
