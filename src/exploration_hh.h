@@ -50,6 +50,7 @@ namespace exploration_hh
     CONFIRMATION,                                                         //!< The confirmation of an obstacle or a recognized face takes place
     OBSTACLE,                                                             //!< The current goal is an obstacle goal
     PANORAMA,                                                             //!< A panorama picture is taken
+    PHOTO,                                                                //!< Needed to wait a short moment for the picture
     FOUND                                                                 //!< Found the right person
   };
   //! Enum to distinguish different kind of goals
@@ -67,10 +68,10 @@ namespace exploration_hh
     int id;                                                              //!< A unique ID
     sensor_msgs::Image img;                                              //!< The picture
     geometry_msgs::Pose robot_pose;                                      //!< The pose of the robot when picture started to be taken
-    std::vector<int> obstacles_;                                         //!< The IDs of the visible obstacles
-    std::vector<geometry_msgs::Pose> obstacle_poses_;                    //!< The poses of the visible obstacles
-    std::vector<int> face_detections_;                                   //!< The IDs of the visible face recognitions
-    std::vector<geometry_msgs::Pose> face_detections_poses_;             //!< The poses of the visible face detections
+    int obstacle_id;                                                     //!< The ID the visible obstacle
+    geometry_msgs::Pose obstacle_pose;                                   //!< The pose of the visible obstacle
+    int face_detection_id;                                               //!< The ID of the visible face recognition
+    geometry_msgs::Pose face_detections_pose;                            //!< The pose of the visible face detection
   };
 }
 /*! The Exploration class is able to coordinate and influence the search for a person */
@@ -90,7 +91,8 @@ private:
   ros::Publisher pub_confirmations_;                                     //!< Publisher for person_detector confirmations
   ros::Publisher pub_pano_start_;                                        //!< Publisher to start a panorama picture
   ros::Publisher pub_pano_stop_;                                         //!< Publisher to stop a panorama picture
-  image_transport::Subscriber *sub_img_;                                 //!< Subscriber for the panorama image topic
+  image_transport::Subscriber *sub_pano_;                                //!< Subscriber for the panorama image topic
+  image_transport::Subscriber *sub_img_;                                 //!< Subscriber to the image topic
   actionlib::SimpleActionClient<move_base_msgs::MoveBaseAction>* ac_;    //!< Client for navigation goals
   ros::Publisher pub_point_marker_;                                      //!< Publisher for rviz goal-cubes
   visualization_msgs::Marker point_marker_;                              //!< Internal storage for rviz goal-cubes. This is used to avoid the initialization.
@@ -145,10 +147,12 @@ private:
   //! A counter for the panorama images we take
   /*! This counter also affects the filenames */
   int image_counter_;
+  sensor_msgs::ImageConstPtr tmp_picture;
   std::vector<exploration_hh::img_meta> images_;                        //!< Storage of all images with metainformation
   image_transport::ImageTransport imageTransport_;                      //!< Needed to connect to an sensor_msgs::Image stream
-  bool first_goal_set_;                                                 //!< Needed to avoid a segfault if we haven't set a goal before
 
+  bool image_taken_;
+  bool image_running_;
   bool panorama_taken_;
   bool panorama_running_;
 
@@ -166,6 +170,10 @@ private:
   void obstacleCallback(const person_detector::ObstacleArray obs);
 
   //! The callback for the panorama image
+  /*! \param img The received image */
+  void panoramaCallback(const sensor_msgs::Image::ConstPtr& img);
+
+  //! The callback for the color image
   /*! \param img The received image */
   void imageCallback(const sensor_msgs::Image::ConstPtr& img);
 
@@ -208,6 +216,9 @@ private:
 
   //! Called function in the state FOUND
   void found();
+
+  //! Called function if we are in PHOTO
+  void photo();
 
   //! Used to get a list of places to a task
   /*! \return true on success */

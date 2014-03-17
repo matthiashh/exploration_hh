@@ -51,6 +51,10 @@ Exploration::Exploration(std::string task_server_name, std::string task_name) : 
 //  {
 //    ROS_INFO("Waiting for the move_base action server to come up");
 //  }
+  //initialize currentgoal
+  current_goal_ = new exploration_hh::ExplorationGoal;
+  current_goal_->detection_id = 100;
+  current_goal_->done = true;
 
   //initialize rviz marker
   pub_point_marker_ = n_.advertise<visualization_msgs::Marker>("/exploration_hh/goal_marker",10);
@@ -63,9 +67,10 @@ Exploration::Exploration(std::string task_server_name, std::string task_name) : 
   point_marker_.type = visualization_msgs::Marker::POINTS;
   point_marker_.scale.x = 0.2;
   point_marker_.scale.y = 0.2;
-  point_marker_.scale.z = 0.2;
-  point_marker_.color.g = 1.0f;
-  point_marker_.color.a = 1.0;
+  point_marker_.pose.position.z = 0.3;
+//  point_marker_.scale.z = 0.2;
+//  point_marker_.color.g = 1.0f;
+//  point_marker_.color.a = 1.0;
 
   text_marker_.header.frame_id = "/map";
   text_marker_.ns = "exploration_hh/text_marker";
@@ -90,11 +95,14 @@ Exploration::Exploration(std::string task_server_name, std::string task_name) : 
   accept_threshold_ = 75;
   erase_threshold_ = 60;
   image_counter_ = 0;
-  first_goal_set_ = false;
   panorama_taken_ = false;
+  panorama_running_ = false;
+  image_taken_ = false;
+  image_running_ = false;
 
   //initialize image-saving
-  sub_img_ = new image_transport::Subscriber (imageTransport_.subscribe("/turtlebot_panorama/panorama",1,&Exploration::imageCallback,this));
+  sub_img_ = new image_transport::Subscriber (imageTransport_.subscribe("/camera/rgb/image_color",1,&Exploration::imageCallback,this));
+  sub_pano_ = new image_transport::Subscriber (imageTransport_.subscribe("/turtlebot_panorama/panorama",3,&Exploration::panoramaCallback,this));
   pub_pano_start_ = n_.advertise<std_msgs::Empty> ("/turtlebot_panorama/take_pano",1);
   pub_pano_stop_ = n_.advertise<std_msgs::Empty> ("/turtlebot_panorama/stop_pano",1);
 
@@ -143,45 +151,26 @@ void Exploration::obstacleCallback(const person_detector::ObstacleArray obs)
 /*! It saves the image interally with metainformation of the robot_pose, the seen obstacles and the seen faces.
     It also saves as well as to the disk to /tmp/panorama_+image_counter_ */
 
-void Exploration::imageCallback(const sensor_msgs::Image::ConstPtr &img)
+void Exploration::panoramaCallback(const sensor_msgs::Image::ConstPtr &img)
 {
   //we receive several images in between, before we get the actual panorama image - trying.
   //but we know, that panorama images are quite big, so we define a treshhold
-  if (img.get()->width < 1500) return;
+  if (!panorama_running_ || img.get()->width < 1500) return;
+  ROS_INFO("Received picture - we're done with the panorama");
   panorama_taken_ = true;
-  //first save internal
-  exploration_hh::img_meta internal;
-  internal.id = image_counter_;
-  internal.img = *img.get();
-  //more later on
-  images_.push_back(internal);
 
-  //then save it to the harddisk
-  cv_bridge::CvImagePtr cv_ptr;
-  std::string filename = "/tmp/panorama_";
-  filename += boost::lexical_cast<std::string>(image_counter_);
-  filename += ".png";
-  image_counter_++;
-  try
-  {
-    cv_ptr = cv_bridge::toCvCopy(img,sensor_msgs::image_encodings::RGB8);
-  }
-  catch (cv_bridge::Exception& ex)
-  {
-    ROS_ERROR("cv_bridge exception when converting panorama image: %s",ex.what());
-    return;
-  }
-  //generate filename
-  try
-  {
-    cv::imwrite(filename,cv_ptr->image);
-  }
-  catch (cv_bridge::Exception& ex)
-  {
-    ROS_ERROR("imwrite exception when saving the image: %s",ex.what());
-  }
-  ROS_INFO("Saved an image called %s",filename.c_str());
+}
 
+/*! It saves an RGB image internally and to file to allow evaluation
+    */
+void Exploration::imageCallback(const sensor_msgs::Image::ConstPtr &img)
+{
+  //just quit if we don't have to take an image
+  if (image_running_)
+    {
+      tmp_picture = img;
+      image_taken_ = true;
+    }
 }
 
 /*! Right now we build the vector with the following rules
@@ -226,72 +215,74 @@ bool Exploration::calcGoals()
 void Exploration::showGoals()
 {
   //first publish all goals
+  point_marker_.points.clear();
+  point_marker_.colors.clear();
   geometry_msgs::Point p;
+  p.z = 0;
+  std_msgs::ColorRGBA c;
+  c.a = 1;
   for (unsigned int it = 0; it < exploration_goals_.size(); it++)
   {
       p.x = exploration_goals_[it].pose.pose.position.x;
       p.y = exploration_goals_[it].pose.pose.position.y;
-      p.z = 0;
-      point_marker_.id = exploration_goals_[it].header.seq;
       if (exploration_goals_[it].done)
       {
-        point_marker_.color.b = 0;
-        point_marker_.color.g = 1;
-        point_marker_.color.r = 0;
+        c.b = 0;
+        c.g = 1;
+        c.r = 0;
       }
       else
       {
-        point_marker_.color.b = 0;
-        point_marker_.color.r = 1;
-        point_marker_.color.g = 0;
+        c.b = 0;
+        c.r = 1;
+        c.g = 0;
       }
-      point_marker_.points.push_back(p);
-      pub_point_marker_.publish(point_marker_);
-      point_marker_.points.clear();
+      point_marker_.colors.push_back(c);
+      point_marker_.points.push_back(p);      
   }
   for (unsigned int it = 0; it < obstacle_goals_.size(); it++)
   {
-      point_marker_.pose.position.x = obstacle_goals_[it].pose.pose.position.x;
-      point_marker_.pose.position.y = obstacle_goals_[it].pose.pose.position.y;
-      point_marker_.pose.position.z = 0;
-      point_marker_.id = obstacle_goals_[it].header.seq;
+      p.x = obstacle_goals_[it].pose.pose.position.x;
+      p.y = obstacle_goals_[it].pose.pose.position.y;
       if (obstacle_goals_[it].done)
       {
-        point_marker_.color.b = 0;
-        point_marker_.color.g = 1;
-        point_marker_.color.r = 0;
+        c.b = 0;
+        c.g = 1;
+        c.r = 0;
       }
       else
       {
-        point_marker_.color.b = 0;
-        point_marker_.color.r = 1;
-        point_marker_.color.g = 0;
+        c.b = 0;
+        c.r = 1;
+        c.g = 0;
       }
-      pub_point_marker_.publish(point_marker_);
+      point_marker_.colors.push_back(c);
+      point_marker_.points.push_back(p);
   }
   for (unsigned int it = 0; it < recognition_goals_.size(); it++)
   {
-      point_marker_.pose.position.x = recognition_goals_[it].pose.pose.position.x;
-      point_marker_.pose.position.y = recognition_goals_[it].pose.pose.position.y;
-      point_marker_.pose.position.z = 0;
-      point_marker_.id = recognition_goals_[it].header.seq;
+      p.x = recognition_goals_[it].pose.pose.position.x;
+      p.y = recognition_goals_[it].pose.pose.position.y;
       if (recognition_goals_[it].done)
       {
-        point_marker_.color.b = 0;
-        point_marker_.color.g = 1;
-        point_marker_.color.r = 0;
+        c.b = 0;
+        c.g = 1;
+        c.r = 0;
       }
       else
       {
-        point_marker_.color.b = 0;
-        point_marker_.color.r = 1;
-        point_marker_.color.g = 0;
+        c.b = 0;
+        c.r = 1;
+        c.g = 0;
       }
-      pub_point_marker_.publish(point_marker_);
+      point_marker_.colors.push_back(c);
+      point_marker_.points.push_back(p);
   }
+  pub_point_marker_.publish(point_marker_);
 
   //then publish the text of the ordered goals
   std::string label;
+  int id;
   for (unsigned int it = 0; it < ordered_goals_.size(); it++)
   {
       label = boost::lexical_cast<std::string>(it+1);
@@ -302,11 +293,16 @@ void Exploration::showGoals()
           label += "Exploration ";
           break;
         case exploration_hh::OBSTACLE_GOAL :
-          label += "Obstacle ";
+          label += "Obstacle ID: ";
+          id = ordered_goals_[it]->detection_id;
+          label += boost::lexical_cast<std::string>(id);
           break;
         case exploration_hh::RECOGNITION_GOAL :
-          label += "Recognition";
+          label += "Recognition ID: ";
+          id = ordered_goals_[it]->detection_id;
+          label += boost::lexical_cast<std::string>(id);
       }
+      label += " prob: ";
       label += boost::lexical_cast<std::string>(ordered_goals_[it]->probability);
       text_marker_.pose.position.x = ordered_goals_[it]->pose.pose.position.x-0.2;
       text_marker_.pose.position.y = ordered_goals_[it]->pose.pose.position.y-0.2;
@@ -322,7 +318,6 @@ void Exploration::showGoals()
 
 void Exploration::setGoal()
 {
-  first_goal_set_ = true;
   if (!ordered_goals_.empty())
   {
     switch (ordered_goals_.front()->type)
@@ -456,13 +451,7 @@ int Exploration::confirmation_face()
       query_to_detector.suceeded = false;
       pub_confirmations_.publish(query_to_detector);
       //find our goal to delete it
-      for (unsigned int it = 0; it < recognition_goals_.size(); it++)
-      {
-          if (recognition_goals_[it].header.seq = current_goal_->header.seq)
-          {
-              recognition_goals_[it].done = true;
-          }
-      }
+      current_goal_->done = true;
       ordered_goals_.erase(ordered_goals_.begin());
       setGoal();
     }
@@ -479,8 +468,8 @@ int Exploration::confirmation_face()
       query_to_detector.tried = true;
       pub_confirmations_.publish(query_to_detector);
       //start panorama
-      node_state_ = exploration_hh::PANORAMA;
-      ROS_INFO("Switched state to PANORAMA");
+      node_state_ = exploration_hh::PHOTO;
+      ROS_INFO("Switched state to PHOTO");
     }
   return 0;
 }
@@ -504,7 +493,10 @@ int Exploration::confirmation_obstacle()
   req.question = "Hey, I'm Max and I'm searching for a person. I've seen this spot and wonder if you are human. Are you?";
   req.header.stamp = ros::Time::now();
   req.expires = ros::Time::now() + ros::Duration(15);
-  yes_no_client_.call(req,res);
+  if (!yes_no_client_.call(req,res))
+  {
+      ROS_ERROR("Couldn't call for a yes-no-question - is the node 'human_interface' running?");
+  }
 
   //process result
   if (res.status == human_interface::ANSWERED)
@@ -514,7 +506,10 @@ int Exploration::confirmation_obstacle()
       //Ask if it's the person, we're looking for
         req.question = "Cool. Are you " + name_ + "?";
         req.header.seq++;
-        yes_no_client_.call(req,res);
+        if (!yes_no_client_.call(req,res))
+        {
+            ROS_ERROR("Couldn't call for a yes-no-question - is the node 'human_interface' running?");
+        }
       //Process this result
       if (res.status == human_interface::ANSWERED)
       {
@@ -561,8 +556,8 @@ int Exploration::confirmation_obstacle()
         human_interface::SpeechRequest s_req;
         s_req.text_to_say = "Okay, I assume that this is an obstacle and take a picture";
         pub_speech_.publish(s_req);
-        node_state_ = exploration_hh::PANORAMA;
-        ROS_INFO("Switched state to PANORAMA");
+        node_state_ = exploration_hh::PHOTO;
+        ROS_INFO("Switched state to PHOTO");
       }
     }
     else // answering no-human
@@ -576,8 +571,8 @@ int Exploration::confirmation_obstacle()
       conf.running = false;
       conf.tried = true;
       pub_confirmations_.publish(conf);
-      node_state_ = exploration_hh::PANORAMA;
-      ROS_INFO("Switched to state PANORAMA.");
+      node_state_ = exploration_hh::PHOTO;
+      ROS_INFO("Switched to state PHOTO.");
     }
   }
   else if (res.status == human_interface::BLOCKED_SPEAKER || res.status == human_interface::UNANSWERED || res.status == human_interface::WRONG_ANSWER)
@@ -591,8 +586,8 @@ int Exploration::confirmation_obstacle()
     human_interface::SpeechRequest s_req;
     s_req.text_to_say = "I didn't get an proper answer. I'm going to take a picture now";
     pub_speech_.publish(s_req);
-    node_state_ = exploration_hh::PANORAMA;
-    ROS_INFO("Switched to state PANORAMA.");
+    node_state_ = exploration_hh::PHOTO;
+    ROS_INFO("Switched to state PHOTO.");
   }
 }
 
@@ -644,14 +639,8 @@ int Exploration::explorationGoal_()
   }
   if (ac_->getState() == actionlib::SimpleClientGoalState::ABORTED)
   {
-    //find goal
-    for (unsigned int it = 0; it < exploration_goals_.size(); it++)
-    {
-      if (current_goal_->header.seq == exploration_goals_[it].header.seq)
-      {
-          exploration_goals_[it].done = true;
-      }
-    }
+    // this is bad - find a better solution
+    current_goal_->done = true;
     ordered_goals_.erase(ordered_goals_.begin());
     setGoal();
   }
@@ -668,19 +657,14 @@ int Exploration::obstacleGoal_()
   //wait if our goal is running
   if (ac_->getState() == actionlib::SimpleClientGoalState::PENDING || ac_->getState() == actionlib::SimpleClientGoalState::ACTIVE)
   {
-    ROS_INFO_THROTTLE(15,"Driving to obstacle goal, %i",current_goal_->header.seq);
+    ROS_INFO_THROTTLE(15,"Driving to obstacle goal %i for detection ID %i",current_goal_->header.seq,current_goal_->detection_id);
     return 0;
   }
   if (ac_->getState() == actionlib::SimpleClientGoalState::ABORTED)
   {
-    //find goal
-    for (unsigned int it = 0; it < exploration_goals_.size(); it++)
-    {
-      if (current_goal_->header.seq == obstacle_goals_[it].header.seq)
-      {
-          obstacle_goals_[it].done = true;
-      }
-    }
+    //this is a bad solution
+      ROS_WARN("Couldn't reach obstagle goal %i for detection ID %i",current_goal_->header.seq,current_goal_->detection_id );
+    current_goal_->done = true;
     ordered_goals_.erase(ordered_goals_.begin());
     setGoal();
   }
@@ -698,49 +682,51 @@ int Exploration::panorama_()
 {
   if (!panorama_taken_ && !panorama_running_)
   {
-    ROS_INFO("Starting to take the panorama");
+    ROS_INFO("Starting to turn around");
     std_msgs::Empty msg;
     pub_pano_start_.publish(msg);
     panorama_running_ = true;
   }
   else if (!panorama_taken_ && panorama_running_)
   {
-    ROS_INFO_THROTTLE(5,"Taking the panorama picture");
+    ROS_INFO_THROTTLE(5,"Turning around...");
     return true;
   }
   else
   {
-    ROS_INFO("Finished to take the panorama picture");
+    ROS_INFO("Finished turn. Marking goal as done.");
     panorama_running_ = false;
+    panorama_taken_ = false;
     //clear goal
     //search for the goal
-    exploration_hh::ExplorationGoal* found_goal;
+    //exploration_hh::ExplorationGoal* found_goal;
     /*! \todo We have pointers. This can be done easier! */
     for (unsigned int it = 0; it < exploration_goals_.size(); it++)
     {
       if (exploration_goals_[it].header.seq == current_goal_->header.seq)
       {
-          found_goal = &exploration_goals_[it];
+          //found_goal = &exploration_goals_[it];
+          exploration_goals_[it].done = true;
           break;
       }
     }
-    for (unsigned int it = 0; it < obstacle_goals_.size(); it++)
-    {
-      if (obstacle_goals_[it].header.seq == current_goal_->header.seq)
-      {
-          found_goal = &obstacle_goals_[it];
-          break;
-      }
-    }
-    for (unsigned int it = 0; it < recognition_goals_.size(); it++)
-    {
-      if (recognition_goals_[it].header.seq == current_goal_->header.seq)
-      {
-          found_goal = &recognition_goals_[it];
-          break;
-      }
-    }
-    found_goal->done = true;
+//    for (unsigned int it = 0; it < obstacle_goals_.size(); it++)
+//    {
+//      if (obstacle_goals_[it].header.seq == current_goal_->header.seq)
+//      {
+//          found_goal = &obstacle_goals_[it];
+//          break;
+//      }
+//    }
+//    for (unsigned int it = 0; it < recognition_goals_.size(); it++)
+//    {
+//      if (recognition_goals_[it].header.seq == current_goal_->header.seq)
+//      {
+//          found_goal = &recognition_goals_[it];
+//          break;
+//      }
+//    }
+//    found_goal->done = true;
     ordered_goals_.erase(ordered_goals_.begin());
     setGoal();
   }
@@ -753,7 +739,10 @@ void Exploration::found()
   human_interface::YesNoQuestionRequest req;
   human_interface::YesNoQuestionResponse res;
   req.question = "Are you okay?";
-  yes_no_client_.call(req,res);
+  if (!yes_no_client_.call(req,res))
+  {
+      ROS_ERROR("Couldn't call for a yes-no-question - is the node 'human_interface' running?");
+  }
   human_interface::SpeechRequest s_req;
   if (res.answer)
   {
@@ -763,12 +752,104 @@ void Exploration::found()
   {
       s_req.text_to_say = "That's a pity. I'm informing your smart home about that";
   }
-  pub_speech_.publish(req);
+  pub_speech_.publish(s_req);
   std::string task_result = "Sucessfully found the person based on face recognition";
   finishTask(true, task_result);
   node_state_ = exploration_hh::IDLE;
   ROS_INFO("Done with the task. Node state is IDLE");
   return;
+}
+
+void Exploration::photo()
+{
+  if (!image_taken_ && !image_running_)
+  {
+    ROS_INFO("Requested to take a picture");
+    image_taken_ = false;
+    image_running_ = true;
+  }
+  else if (image_running_ && !image_taken_)
+  {
+    ROS_INFO_THROTTLE(2,"Waiting for image");
+  }
+  else
+  {
+    //save internal
+    exploration_hh::img_meta internal;
+    internal.id = image_counter_;
+    image_counter_++;
+    internal.img = *tmp_picture.get();
+
+    //search for the pose
+    if (current_goal_->type == exploration_hh::RECOGNITION_GOAL)
+    {
+      for (unsigned int it = 0; it < detections_.detections.size(); it++)
+        {
+          if (current_goal_->detection_id == detections_.detections[it].header.seq)
+          {
+              internal.face_detections_pose = detections_.detections[it].latest_pose_map.pose;
+              internal.face_detection_id = detections_.detections[it].header.seq;
+              break;
+          }
+        }
+    }
+    else
+    {
+      for (unsigned int it = 0; it < obstacles_.obstacles.size(); it++)
+      {
+        if (current_goal_->detection_id == obstacles_.obstacles[it].header.seq)
+        {
+            internal.obstacle_pose = obstacles_.obstacles[it].center;
+            internal.obstacle_id = obstacles_.obstacles[it].header.seq;
+            break;
+        }
+      }
+    }
+    images_.push_back(internal);
+
+    ROS_INFO("Saved image internally");
+    //then save it to the harddisk
+    cv_bridge::CvImagePtr cv_ptr;
+    std::string filename = "/tmp/picture_";
+    filename += boost::lexical_cast<std::string>(image_counter_);
+    filename += "_task_";
+    filename += boost::lexical_cast<std::string>((*task_goal_.getGoal()).task_id);
+    if (current_goal_->type == exploration_hh::OBSTACLE_GOAL)
+    {
+      filename += "_obs_";
+    }
+    else
+    {
+      filename += "_rec_";
+    }
+    int det_id = current_goal_->detection_id;
+    filename += boost::lexical_cast<std::string>(det_id);
+    filename += ".png";
+    try
+    {
+      cv_ptr = cv_bridge::toCvCopy(tmp_picture,sensor_msgs::image_encodings::RGB8);
+    }
+    catch (cv_bridge::Exception& ex)
+    {
+      ROS_ERROR("cv_bridge exception when converting image: %s",ex.what());
+      return;
+    }
+    try
+    {
+      cv::imwrite(filename,cv_ptr->image);
+    }
+    catch (cv_bridge::Exception& ex)
+    {
+      ROS_ERROR("imwrite exception when saving the image: %s",ex.what());
+    }
+    ROS_INFO("Saved an image called %s",filename.c_str());
+
+    // set state
+    current_goal_->done = true;
+    ordered_goals_.erase(ordered_goals_.begin());
+    setGoal();
+  }
+
 }
 
 bool Exploration::getPlaces()
@@ -807,6 +888,8 @@ bool Exploration::getPlaces()
 
 bool Exploration::calcGoalPlace(geometry_msgs::Pose *robot_pose, geometry_msgs::Pose *int_place, geometry_msgs::Pose &goal)
 {
+  ROS_INFO("Robot Pos x: %f, y: %f",robot_pose->position.x,robot_pose->position.y);
+  ROS_INFO("Obs Pos x: %f, y: %f",int_place->position.x,int_place->position.y);
   //the pythagorean theorem and the quadratic equation are used to calculate the position
   //the goal is to find a point 1m in front of the interesting place on the line between the robot pose and the place
   double distance = 1;
@@ -816,42 +899,46 @@ bool Exploration::calcGoalPlace(geometry_msgs::Pose *robot_pose, geometry_msgs::
   m = (robot_pose->position.y - int_place->position.y) / (robot_pose->position.x - int_place->position.x);
   b = robot_pose->position.y - m*robot_pose->position.x;
 
-  //we want to know, how much we have to move into x-direction to be <distance> away from the point
-  // a = 1 + m*m
-  // b = -2*int_place_x - 2*m*int_place_y + 2*m*b
-  // c = int_place_x*int_place_x + int_place_y*int_place_y - int_place_x*2*b + b*b - distance*distance
-  double q_a;
-  double q_b;
-  double q_c;
-  q_a = 1+m*m;
-  q_b = -2*int_place->position.x - 2*m*int_place->position.y + 2*m*b;
-  q_c = int_place->position.x*int_place->position.x + int_place->position.y*int_place->position.y - int_place->position.x*2*b + b*b - distance*distance;
-  //check the value in the sqrt
-  double root = (q_b*q_b)-4*q_a*q_c;
-  if (root < 0) return false;
-  double x_1;
-  double x_2;
-  x_1 = (-q_b + sqrt(root)) / (2*q_a);
-  x_2 = (-q_b - sqrt(root)) / (2*q_a);
-  //check distances to the robot pose and pick the closest one
-  double d1;
-  double d2;
-  d1 = sqrt((robot_pose->position.x - x_1)*(robot_pose->position.x - x_1));
-  d2 = sqrt((robot_pose->position.x - x_2)*(robot_pose->position.x - x_2));
-  if (d1 < d2)
-  {
-    goal.position.x =  x_1;
-    goal.position.y = m*x_1+b;
-  }
-  else
-  {
-    goal.position.x = x_2;
-    goal.position.y = m*x_2+b;
-  }
+//  //we want to know, how much we have to move into x-direction to be <distance> away from the point
+//  // a = 1 + m*m
+//  // b = -2*int_place_x - 2*m*int_place_y + 2*m*b
+//  // c = int_place_x*int_place_x + int_place_y*int_place_y - int_place_x*2*b + b*b - distance*distance
+//  double q_a;
+//  double q_b;
+//  double q_c;
+//  q_a = 1+m*m;
+//  q_b = -2*int_place->position.x - 2*m*int_place->position.y + 2*m*b;
+//  q_c = int_place->position.x*int_place->position.x + int_place->position.y*int_place->position.y - int_place->position.x*2*b + b*b - distance*distance;
+//  //check the value in the sqrt
+//  double root = (q_b*q_b)-4*q_a*q_c;
+//  if (root < 0)
+//    {
+//      ROS_WARN_THROTTLE(10,"Root was negative - that's a bad sign");
+//      return false;
+//    }
+
+//  double x_1;
+//  double x_2;
+//  x_1 = (-q_b + sqrt(root)) / (2*q_a);
+//  x_2 = (-q_b - sqrt(root)) / (2*q_a);
+//  //check distances to the robot pose and pick the closest one
+//  double d1;
+//  double d2;
+//  d1 = sqrt((robot_pose->position.x - x_1)*(robot_pose->position.x - x_1));
+//  d2 = sqrt((robot_pose->position.x - x_2)*(robot_pose->position.x - x_2));
+//  if (d1 < d2)
+//  {
+//    goal.position.x =  x_1;
+//    goal.position.y = m*x_1+b;
+//  }
+//  else
+//  {
+//    goal.position.x = x_2;
+//    goal.position.y = m*x_2+b;
+//  }
 
   //quaternions
   tf::Vector3 axe (0,0,1);
-
   double angle = atan(m);
   //tf::Vector3 rob (robot_pose->position.x,robot_pose->position.y,robot_pose->position.z);
   //tf::Vector3 obs (int_place->position.x,int_place->position.y,int_place->position.z);
@@ -863,6 +950,8 @@ bool Exploration::calcGoalPlace(geometry_msgs::Pose *robot_pose, geometry_msgs::
   goal.orientation.x = q.x();
   goal.orientation.y = q.y();
   goal.orientation.z = q.z();
+
+  ROS_INFO("Calc Place Pos x: %f, y: %f. Orient qz: %f qw: %f",goal.position.x,goal.position.y,goal.orientation.z,goal.orientation.w);
   return true;
 }
 
@@ -894,7 +983,7 @@ void Exploration::finishTask(bool success, std::string res)
   else
   {
     result_.success = false;
-    task_goal_.setAborted(result_,"Didn't find the person");
+    task_goal_.setSucceeded(result_,"Didn't find the person");
   }
   exploration_goals_.clear();
   goal_active_ = false;
@@ -939,13 +1028,16 @@ bool Exploration::processDetections()
       goal.pose.header.frame_id = "/map";
       goal.pose.header.seq = 0;
       goal.pose.header.stamp = ros::Time::now();
-      calcGoalPlace(&detections_.detections[it].last_seen_from.pose.pose,&detections_.detections[it].latest_pose_map.pose,goal.pose.pose);
       //goal.pose.pose = detections_.detections[it].last_seen_from.pose.pose;
       goal.type = exploration_hh::RECOGNITION_GOAL;
       goal.done = false;
       // there's some space to improve here
       goal.probability = 100;
       goal.detection_id = detections_.detections[it].header.seq;
+      goal.pose.pose = detections_.detections[it].last_seen_from.pose.pose;
+      geometry_msgs::PoseWithCovarianceStamped p;
+      //ROS_INFO("Calculating place for detection goal with detection ID %i",goal.detection_id);
+      calcGoalPlace(&detections_.detections[it].last_seen_from.pose.pose,&detections_.detections[it].latest_pose_map.pose,goal.pose.pose);
       recognition_goals_.push_back(goal);
       ROS_INFO("Added new detection");
     }
@@ -1011,11 +1103,27 @@ bool Exploration::processObstacles()
       goal.done = false;
       goal.probability = obstacles_.obstacles[it].probability;
       goal.detection_id = obstacles_.obstacles[it].header.seq;
-      // calculate the place to go
-      calcGoalPlace(&obstacles_.obstacles[it].robot_pose.pose.pose,&obstacles_.obstacles[it].center,goal.pose.pose);
+      // calculate the place to go - at least the direction
+      double m = (obstacles_.obstacles[it].robot_pose.pose.pose.position.y - obstacles_.obstacles[it].center.position.y) /
+          (obstacles_.obstacles[it].robot_pose.pose.pose.position.x - obstacles_.obstacles[it].center.position.x);
+      double angle = atan(m);
+      ROS_INFO("Angle is %f calulated from m %f",angle,m);
+      tf::Vector3 axe (0,0,1);
+      tf::Quaternion q;
+      q.setRotation(axe,angle);
+      goal.pose.pose.position = obstacles_.obstacles[it].robot_pose.pose.pose.position;
+      ROS_INFO("Quaternion w is %f and z is %f",q.w(),q.z());
+      goal.pose.pose.orientation.w = q.w();
+      goal.pose.pose.orientation.z = q.z();
+
+      //ROS_INFO("Calculating place for obstacle goal with detection ID %i",goal.detection_id);
+//      if(!calcGoalPlace(&obstacles_.obstacles[it].robot_pose.pose.pose,&obstacles_.obstacles[it].center,goal.pose.pose))
+//      {
+//        continue;
+//      }
       //goal.pose.pose = obstacles_.obstacles[it].robot_pose.pose.pose;
       obstacle_goals_.push_back(goal);
-      ROS_INFO("Added new obstacle to the goal list with goal_number %i, goal id %i and probability %i",goal_counter_,obstacle_goals_[it].header.seq,goal.probability);
+      ROS_INFO("Added new obstacle to the goal list with goal_number %i, goal id %i and probability %i",goal_counter_,goal.detection_id,goal.probability);
 
     }
   }
@@ -1031,94 +1139,85 @@ int Exploration::run()
   ros::Rate r(10);
   while (ros::ok())
   {
+    showGoals();
     //care about goals
+    //if (task_goal_.getGoalStatus().status == actionlib_msgs::GoalStatus::ACTIVE)
     if (goal_active_)
     {
       calcGoals();
+      // finish if there aren't any new goals
       if (ordered_goals_.empty())
       {
         std::string task_result = "Didn't find the person.";
         finishTask(false,task_result);
       }
+      // or give feedback
       else
       {
         feedback_.percentage = (exploration_goals_.size()+obstacle_goals_.size()+recognition_goals_.size())/ordered_goals_.size();
         feedback_.intermediate_result = "Still running";
         task_goal_.publishFeedback(feedback_);
       }
-    }
-    showGoals();
-    //detectionsstuff
-    processDetections();
-    processObstacles();
+      //detectionsstuff
+      processDetections();
+      processObstacles();
 
-    //we just need to continue if we have goals
-    if (!ordered_goals_.empty())
-    {
-      if (!first_goal_set_)
+      //check if our current goal is still the prefered goal in the order
+      if (current_goal_->detection_id != ordered_goals_.front()->detection_id)
       {
-        setGoal();
-      }
-      else if (node_state_ == exploration_hh::CONFIRMATION || node_state_ == exploration_hh::FOUND)
-      {
-
-      }
-      else
-      {
-        //check if our current goal is still the prefered goal in the order
-        if (current_goal_->detection_id != ordered_goals_.front()->detection_id)
+        //front goal is different - we have to set a new goal - in these state we're just driving or waiting - we can safely set a new goal
+        if (node_state_ == exploration_hh::IDLE || node_state_ == exploration_hh::EXPLORATION || node_state_ == exploration_hh::OBSTACLE || node_state_ == exploration_hh::FACE_RECOGNITION)
         {
-          //front goal is different - we have to set a new goal
-          if (node_state_ == exploration_hh::IDLE || node_state_ == exploration_hh::EXPLORATION || node_state_ == exploration_hh::OBSTACLE || node_state_ == exploration_hh::CONFIRMATION)
-          {
-            //in these state we're just driving or waiting - we can safely set a new goal
-            setGoal();
-          }
-          else if (node_state_ == exploration_hh::PANORAMA)
-          {
-            // aborting the panorama takes extra effort
-            std_msgs::Empty msg;
-            pub_pano_stop_.publish(msg);
-            panorama_taken_ = false;
-            panorama_running_ = false;
-            // abort the panorama action
-            setGoal();
+          setGoal();
+        }
+        else if (node_state_ == exploration_hh::PANORAMA)
+        {
+          // aborting the panorama takes extra effort
+          std_msgs::Empty msg;
+          pub_pano_stop_.publish(msg);
+          ROS_INFO("Stopped panorama picture");
+          panorama_taken_ = false;
+          panorama_running_ = false;
+          // abort the panorama action
+          setGoal();
           }
         }
-      }
-
-      switch (node_state_)
-      {
-        case exploration_hh::IDLE :
-          setGoal();
-          break;
-        case exploration_hh::CONFIRMATION :
-          if (current_goal_->type == exploration_hh::RECOGNITION_GOAL)
-          {
-            confirmation_face();
-          }
-          else
-          {
-            confirmation_obstacle();
-          }
-          break;
-        case exploration_hh::FACE_RECOGNITION :
-          recognitionGoal_();
-          break;
-        case exploration_hh::EXPLORATION :
-          explorationGoal_();
-          break;
-        case exploration_hh::PANORAMA :
-          panorama_();
-          break;
-        case exploration_hh::OBSTACLE :
-          obstacleGoal_();
-          break;
-        case exploration_hh::FOUND :
-          found();
-          break;
-      }
     }
+    switch (node_state_)
+    {
+      case exploration_hh::IDLE :
+        setGoal();
+        break;
+      case exploration_hh::CONFIRMATION :
+        if (current_goal_->type == exploration_hh::RECOGNITION_GOAL)
+        {
+          confirmation_face();
+        }
+        else
+        {
+          confirmation_obstacle();
+        }
+        break;
+      case exploration_hh::FACE_RECOGNITION :
+        recognitionGoal_();
+        break;
+      case exploration_hh::EXPLORATION :
+        explorationGoal_();
+        break;
+      case exploration_hh::PANORAMA :
+        panorama_();
+        break;
+      case exploration_hh::OBSTACLE :
+        obstacleGoal_();
+        break;
+      case exploration_hh::FOUND :
+        found();
+        break;
+      case exploration_hh::PHOTO :
+        photo();
+        break;
+    }
+
 
     ros::spinOnce();
     r.sleep();
