@@ -324,23 +324,25 @@ void Exploration::setGoal()
     {
       case exploration_hh::EXPLORATION_GOAL :
         node_state_ = exploration_hh::EXPLORATION;
+        move_base_goal_.target_pose.pose.orientation.w = 0.70710678;
+        move_base_goal_.target_pose.pose.orientation.z = -0.70710678;
         ROS_INFO("Switched state to EXPLORATION_GOAL");
         break;
       case exploration_hh::OBSTACLE_GOAL :
         node_state_ = exploration_hh::OBSTACLE;
+        move_base_goal_.target_pose.pose.orientation = (*ordered_goals_.front()).pose.pose.orientation;
         ROS_INFO("Switched state to OBSTACLE_GOAL");
         break;
       case exploration_hh::RECOGNITION_GOAL :
         node_state_ = exploration_hh::FACE_RECOGNITION;
+        move_base_goal_.target_pose.pose.orientation = (*ordered_goals_.front()).pose.pose.orientation;
         ROS_INFO("Switched state to RECOGNITION_GOAL");
     }
     current_goal_ = ordered_goals_.front();
     move_base_goal_.target_pose.header.stamp = ros::Time::now();
     move_base_goal_.target_pose.pose.position.x = (*ordered_goals_.front()).pose.pose.position.x;
     move_base_goal_.target_pose.pose.position.y = (*ordered_goals_.front()).pose.pose.position.y;
-    move_base_goal_.target_pose.pose.orientation.w = 0.70710678;
-    move_base_goal_.target_pose.pose.orientation.z = -0.70710678;
-    ROS_INFO("Sending goal with x = %f and y = %f",move_base_goal_.target_pose.pose.position.x, move_base_goal_.target_pose.pose.position.y);
+    ROS_INFO("Sending goal with position x = %f and y = %f and orientation w = %f and z = %f",move_base_goal_.target_pose.pose.position.x, move_base_goal_.target_pose.pose.position.y, move_base_goal_.target_pose.pose.orientation.w,move_base_goal_.target_pose.pose.orientation.z);
     ac_->sendGoal(move_base_goal_);
     //set status based on the type of the goal
   }
@@ -888,70 +890,31 @@ bool Exploration::getPlaces()
 
 bool Exploration::calcGoalPlace(geometry_msgs::Pose *robot_pose, geometry_msgs::Pose *int_place, geometry_msgs::Pose &goal)
 {
-  ROS_INFO("Robot Pos x: %f, y: %f",robot_pose->position.x,robot_pose->position.y);
-  ROS_INFO("Obs Pos x: %f, y: %f",int_place->position.x,int_place->position.y);
-  //the pythagorean theorem and the quadratic equation are used to calculate the position
-  //the goal is to find a point 1m in front of the interesting place on the line between the robot pose and the place
+  // how far away from the point do we want to stop?
   double distance = 1;
-  //build a line
-  double b = 0;
-  double m = 0;
-  m = (robot_pose->position.y - int_place->position.y) / (robot_pose->position.x - int_place->position.x);
-  b = robot_pose->position.y - m*robot_pose->position.x;
 
-//  //we want to know, how much we have to move into x-direction to be <distance> away from the point
-//  // a = 1 + m*m
-//  // b = -2*int_place_x - 2*m*int_place_y + 2*m*b
-//  // c = int_place_x*int_place_x + int_place_y*int_place_y - int_place_x*2*b + b*b - distance*distance
-//  double q_a;
-//  double q_b;
-//  double q_c;
-//  q_a = 1+m*m;
-//  q_b = -2*int_place->position.x - 2*m*int_place->position.y + 2*m*b;
-//  q_c = int_place->position.x*int_place->position.x + int_place->position.y*int_place->position.y - int_place->position.x*2*b + b*b - distance*distance;
-//  //check the value in the sqrt
-//  double root = (q_b*q_b)-4*q_a*q_c;
-//  if (root < 0)
-//    {
-//      ROS_WARN_THROTTLE(10,"Root was negative - that's a bad sign");
-//      return false;
-//    }
+  //calculate position
+  tf::Vector3 diff;
+  diff.setX(int_place->position.x - robot_pose->position.x);
+  diff.setY(int_place->position.y - robot_pose->position.y);
+  diff.setW(0);
+  diff.setZ(0);
+  double x_diff = diff.getX();
+  double y_diff = diff.getY();
+  diff = diff.normalize();
+  diff = diff*distance;
 
-//  double x_1;
-//  double x_2;
-//  x_1 = (-q_b + sqrt(root)) / (2*q_a);
-//  x_2 = (-q_b - sqrt(root)) / (2*q_a);
-//  //check distances to the robot pose and pick the closest one
-//  double d1;
-//  double d2;
-//  d1 = sqrt((robot_pose->position.x - x_1)*(robot_pose->position.x - x_1));
-//  d2 = sqrt((robot_pose->position.x - x_2)*(robot_pose->position.x - x_2));
-//  if (d1 < d2)
-//  {
-//    goal.position.x =  x_1;
-//    goal.position.y = m*x_1+b;
-//  }
-//  else
-//  {
-//    goal.position.x = x_2;
-//    goal.position.y = m*x_2+b;
-//  }
+  goal.position.x = int_place->position.x - diff.x();
+  goal.position.y = int_place->position.y - diff.y();
 
-  //quaternions
+  // calculate orientation
+  double angle = atan2(diff.y(),diff.x());
   tf::Vector3 axe (0,0,1);
-  double angle = atan(m);
-  //tf::Vector3 rob (robot_pose->position.x,robot_pose->position.y,robot_pose->position.z);
-  //tf::Vector3 obs (int_place->position.x,int_place->position.y,int_place->position.z);
   tf::Quaternion q;
   q.setRotation(axe,angle);
-  //Eigen::Quaternion<double> quat;
-  //Eigen::QuaternionBase<double>::setFromTwoVectors(rob,obs);
-  goal.orientation.w = q.w();
-  goal.orientation.x = q.x();
-  goal.orientation.y = q.y();
+  q = q.normalize();
   goal.orientation.z = q.z();
-
-  ROS_INFO("Calc Place Pos x: %f, y: %f. Orient qz: %f qw: %f",goal.position.x,goal.position.y,goal.orientation.z,goal.orientation.w);
+  goal.orientation.w = q.w();
   return true;
 }
 
@@ -1068,7 +1031,7 @@ bool Exploration::processObstacles()
         {
           //update information
           found = true;
-          //delete it, if it's unchecked and doesn't exist anymore OR if the probability went lower than 50
+          //delete it, if it's unchecked and doesn't exist anymore OR if the probability went lower than the treshold
           if ((!obstacles_.obstacles[it].present && !obstacles_.obstacles[it].confirmation.suceeded) || obstacles_.obstacles[it].probability < erase_threshold_)
           {
             ROS_INFO("Deleted obstacle with ID %i. It was present: %i. It had probability: %i",obstacle_goals_[ig].detection_id,obstacles_.obstacles[it].present,obstacles_.obstacles[it].probability);
@@ -1079,7 +1042,8 @@ bool Exploration::processObstacles()
           {
               obstacle_goals_[ig].done = true;
           }
-          obstacle_goals_[ig].pose.pose = obstacles_.obstacles[it].robot_pose.pose.pose;
+          calcGoalPlace(&obstacles_.obstacles[it].robot_pose.pose.pose,&obstacles_.obstacles[it].center,obstacle_goals_[ig].pose.pose);
+          //obstacle_goals_[ig].pose.pose = obstacles_.obstacles[it].robot_pose.pose.pose;
           obstacle_goals_[ig].probability = obstacles_.obstacles[it].probability;
           obstacle_goals_[ig].header.stamp = ros::Time::now();
           break;
@@ -1104,24 +1068,10 @@ bool Exploration::processObstacles()
       goal.probability = obstacles_.obstacles[it].probability;
       goal.detection_id = obstacles_.obstacles[it].header.seq;
       // calculate the place to go - at least the direction
-      double m = (obstacles_.obstacles[it].robot_pose.pose.pose.position.y - obstacles_.obstacles[it].center.position.y) /
-          (obstacles_.obstacles[it].robot_pose.pose.pose.position.x - obstacles_.obstacles[it].center.position.x);
-      double angle = atan(m);
-      ROS_INFO("Angle is %f calulated from m %f",angle,m);
-      tf::Vector3 axe (0,0,1);
-      tf::Quaternion q;
-      q.setRotation(axe,angle);
-      goal.pose.pose.position = obstacles_.obstacles[it].robot_pose.pose.pose.position;
-      ROS_INFO("Quaternion w is %f and z is %f",q.w(),q.z());
-      goal.pose.pose.orientation.w = q.w();
-      goal.pose.pose.orientation.z = q.z();
-
-      //ROS_INFO("Calculating place for obstacle goal with detection ID %i",goal.detection_id);
-//      if(!calcGoalPlace(&obstacles_.obstacles[it].robot_pose.pose.pose,&obstacles_.obstacles[it].center,goal.pose.pose))
-//      {
-//        continue;
-//      }
-      //goal.pose.pose = obstacles_.obstacles[it].robot_pose.pose.pose;
+      geometry_msgs::Pose robot_pose = obstacles_.obstacles[it].robot_pose.pose.pose;
+      geometry_msgs::Pose int_place = obstacles_.obstacles[it].center;
+      calcGoalPlace(&obstacles_.obstacles[it].robot_pose.pose.pose,&obstacles_.obstacles[it].center,goal.pose.pose);
+      ROS_INFO("Calc Goal Pos x: %f, y: %f. Orient qz: %f qw: %f",goal.pose.pose.position.x,goal.pose.pose.position.y,goal.pose.pose.orientation.z,goal.pose.pose.orientation.w);
       obstacle_goals_.push_back(goal);
       ROS_INFO("Added new obstacle to the goal list with goal_number %i, goal id %i and probability %i",goal_counter_,goal.detection_id,goal.probability);
 
